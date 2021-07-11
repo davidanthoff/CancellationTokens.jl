@@ -1,4 +1,4 @@
-using Test: get_test_counts
+using Test:get_test_counts
 using CancellationTokens
 using Test
 
@@ -32,6 +32,6 @@ using Test
     @async begin
         sleep(0.1)
         cancel(src)
-    end
+        end
     @test_throws OperationCanceledException sleep(20.0, get_token(src))
 end
