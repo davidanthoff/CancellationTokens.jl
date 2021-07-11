@@ -1,0 +1,43 @@
+@static if VERSION < v"1.1"
+    mutable struct Event
+        lock::Mutex
+        q::Vector{Task}
+        set::Bool
+        # TODO: use a Condition with its paired lock
+        Event() = new(Mutex(), Task[], false)
+    end
+    
+    function Base.wait(e::Event)
+        e.set && return
+        lock(e.lock)
+        while !e.set
+            ct = current_task()
+            push!(e.q, ct)
+            unlock(e.lock)
+            try
+                wait()
+            catch
+                filter!(x->x!==ct, e.q)
+                rethrow()
+            end
+            lock(e.lock)
+        end
+        unlock(e.lock)
+        return nothing
+    end
+    
+    function Base.notify(e::Event)
+        lock(e.lock)
+        if !e.set
+            e.set = true
+            for t in e.q
+                schedule(t)
+            end
+            empty!(e.q)
+        end
+        unlock(e.lock)
+        return nothing
+    end
+else
+    using Base: Event
+end

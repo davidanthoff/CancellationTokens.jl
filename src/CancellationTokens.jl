@@ -4,12 +4,14 @@ import Dates
 
 export CancellationTokenSource, token, is_cancellation_requested, cancel, OperationCanceledException
 
+include("event.jl")
+
 @enum CancellationTokenSourceStates NotCanceledState=1 NotifyingState=2 NotifyingCompleteState=3
 
 mutable struct CancellationTokenSource
     _state::CancellationTokenSourceStates
-    _timer::Union::{Nothing,Timer}
-    _kernel_event::Union{Nothing,Base.Event} # TODO Event is Julia > 1.1, make it work on 1.0
+    _timer::Union{Nothing,Timer}
+    _kernel_event::Union{Nothing,Event} # TODO Event is Julia > 1.1, make it work on 1.0
 
     function new()
         return new(NotCanceledState, nothing, nothing)
