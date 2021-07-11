@@ -39,7 +39,7 @@
         return nothing
     end
 elseif VERSION < v"1.2"
-    using Base.Threads.Event
+    using Base.Threads: Event
 else
     using Base: Event
 end
