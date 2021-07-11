@@ -17,7 +17,7 @@
             try
                 wait()
             catch
-                filter!(x->x!==ct, e.q)
+                filter!(x -> x !== ct, e.q)
                 rethrow()
             end
             lock(e.lock)
@@ -39,7 +39,7 @@
         return nothing
     end
 elseif VERSION < v"1.2"
-    using Base.Threads: Event
+    using Base.Threads:Event
 else
-    using Base: Event
+    using Base:Event
 end
