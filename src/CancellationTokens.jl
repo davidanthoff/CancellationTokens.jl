@@ -54,7 +54,7 @@ is_cancellation_requested(x::CancellationTokenSource) = x._state > NotCanceledSt
 
 function _waithandle(x::CancellationTokenSource)
     if x._kernel_event===nothing
-        x._kernel_event = Base.Event()
+        x._kernel_event = Event()
     end
 
     return x._kernel_event
