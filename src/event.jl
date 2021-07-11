@@ -1,10 +1,10 @@
 @static if VERSION < v"1.1"
     mutable struct Event
-        lock::Base.Mutex
+        lock::Base.Threads.Mutex
         q::Vector{Task}
         set::Bool
         # TODO: use a Condition with its paired lock
-        Event() = new(Base.Mutex(), Task[], false)
+        Event() = new(Base.Threads.Mutex(), Task[], false)
     end
     
     function Base.wait(e::Event)
