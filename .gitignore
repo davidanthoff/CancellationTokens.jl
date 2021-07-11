@@ -5,3 +5,4 @@
 .vscode
 *.ignore.*
 Manifest.toml
+lcov.info
