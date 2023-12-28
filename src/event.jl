@@ -6,7 +6,7 @@
         # TODO: use a Condition with its paired lock
         Event() = new(Base.Threads.Mutex(), Task[], false)
     end
-    
+
     function Base.wait(e::Event)
         e.set && return
         lock(e.lock)
@@ -17,7 +17,7 @@
             try
                 wait()
             catch
-                filter!(x->x!==ct, e.q)
+                filter!(x -> x !== ct, e.q)
                 rethrow()
             end
             lock(e.lock)
@@ -25,7 +25,7 @@
         unlock(e.lock)
         return nothing
     end
-    
+
     function Base.notify(e::Event)
         lock(e.lock)
         if !e.set
