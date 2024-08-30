@@ -6,7 +6,7 @@ export CancellationTokenSource, get_token, is_cancellation_requested, cancel, Op
 
 include("event.jl")
 
-@enum CancellationTokenSourceStates NotCanceledState=1 NotifyingState=2 NotifyingCompleteState=3
+@enum CancellationTokenSourceStates NotCanceledState = 1 NotifyingState = 2 NotifyingCompleteState = 3
 
 mutable struct CancellationTokenSource
     _state::CancellationTokenSourceStates
@@ -29,15 +29,15 @@ function CancellationTokenSource(timespan_in_seconds::Real)
 end
 
 function _internal_notify(x::CancellationTokenSource)
-    if x._state==NotCanceledState
+    if x._state == NotCanceledState
         x._state = NotifyingState
 
-        if x._timer!==nothing
+        if x._timer !== nothing
             close(x._timer)
-            x._timer = nothing            
+            x._timer = nothing
         end
-    
-        if x._kernel_event!==nothing
+
+        if x._kernel_event !== nothing
             notify(x._kernel_event)
             x._kernel_event = nothing
         end
@@ -55,7 +55,7 @@ end
 is_cancellation_requested(x::CancellationTokenSource) = x._state > NotCanceledState
 
 function _waithandle(x::CancellationTokenSource)
-    if x._kernel_event===nothing
+    if x._kernel_event === nothing
         x._kernel_event = Event()
     end
 

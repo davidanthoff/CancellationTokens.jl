@@ -22,7 +22,7 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     @async try
         wait(token)
 
-        lock(s.lock) do 
+        lock(s.lock) do
             notify(s.cond, OperationCanceledException(token); error=true)
         end
     catch err
