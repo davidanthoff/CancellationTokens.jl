@@ -1,5 +1,7 @@
 module CancellationTokens
 
+import Sockets
+
 export CancellationTokenSource, get_token, is_cancellation_requested, cancel, OperationCanceledException
 
 include("event.jl")

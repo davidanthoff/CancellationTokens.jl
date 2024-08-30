@@ -17,3 +17,17 @@ function Base.sleep(sec::Real, token::CancellationToken)
         throw(OperationCanceledException(token))
     end
 end
+
+function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
+    @async try
+        wait(token)
+
+        lock(s.lock) do 
+            notify(s.cond, OperationCanceledException(token); error=true)
+        end
+    catch err
+        Base.display_error(err, catch_backtrace())
+    end
+
+    return readline(s; keep=keep)
+end
