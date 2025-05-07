@@ -88,15 +88,32 @@ struct OperationCanceledException <: Exception
     _token::CancellationToken
 end
 
+# WaitCanceledException
+struct WaitCanceledException <: Exception
+end
+
 get_token(x::OperationCanceledException) = x._token
 
 function CancellationTokenSource(tokens::CancellationToken...)
     x = CancellationTokenSource()
 
-    for t in tokens
-        @async begin
-            wait(t)
+    tasks = Vector{Task}(undef, length(tokens))
+
+    for (i,token) in enumerate(tokens)
+        tasks[i] = @async try
+            self_index = i
+            wait(token)
             _internal_notify(x)
+
+            for (j,task) in enumerate(tasks)
+                if j!=self_index
+                    schedule(task, WaitCanceledException(), error=true)
+                end
+            end
+        catch err
+            if !(err isa WaitCanceledException)
+                rethrow(err)
+            end
         end
     end
 
