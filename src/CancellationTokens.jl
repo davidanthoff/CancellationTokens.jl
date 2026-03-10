@@ -27,7 +27,7 @@ module CancellationTokens
 
 import Sockets
 
-export CancellationTokenSource, CancellationToken, get_token, is_cancellation_requested, cancel, OperationCanceledException
+export CancellationTokenSource, CancellationToken, CancellationTokenRegistration, get_token, is_cancellation_requested, cancel, register, OperationCanceledException
 
 include("event.jl")
 
@@ -43,10 +43,12 @@ include("event.jl")
         @atomic _state::CancellationTokenSourceStates
         _timer::Union{Nothing,Timer}
         @atomic _kernel_event::Union{Nothing,Event}
-        _lock::ReentrantLock   # only used for _timer access
+        _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
+        _next_callback_id::Int
+        _lock::ReentrantLock
 
         function CancellationTokenSource()
-            return new(NotCanceledState, nothing, nothing, ReentrantLock())
+            return new(NotCanceledState, nothing, nothing, Pair{Int,Any}[], 1, ReentrantLock())
         end
     end
 else
@@ -54,10 +56,12 @@ else
         _state::CancellationTokenSourceStates
         _timer::Union{Nothing,Timer}
         _kernel_event::Union{Nothing,Event}
+        _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
+        _next_callback_id::Int
         _lock::ReentrantLock
 
         function CancellationTokenSource()
-            return new(NotCanceledState, nothing, nothing, ReentrantLock())
+            return new(NotCanceledState, nothing, nothing, Pair{Int,Any}[], 1, ReentrantLock())
         end
     end
 end
@@ -130,18 +134,29 @@ end
         (_, success) = @atomicreplace x._state NotCanceledState => NotifyingState
         success || return
 
-        # Timer cleanup still needs the lock (_timer is not atomic).
-        lock(x._lock) do
+        # Timer cleanup and callback snapshot under the lock.
+        callbacks = lock(x._lock) do
             if x._timer !== nothing
                 close(x._timer)
                 x._timer = nothing
             end
+            cbs = copy(x._callbacks)
+            empty!(x._callbacks)
+            cbs
         end
 
         # Signal the event if a waiter has installed one.
         event = @atomic :acquire x._kernel_event
         if event !== nothing
             notify(event)
+        end
+
+        # Invoke registered callbacks synchronously (like .NET).
+        for (_, cb) in callbacks
+            try
+                cb()
+            catch
+            end
         end
 
         @atomic :release x._state = NotifyingCompleteState
@@ -153,7 +168,7 @@ end
 else # VERSION < v"1.7"
 
     function _internal_notify(x::CancellationTokenSource)
-        lock(x._lock) do
+        callbacks = lock(x._lock) do
             if x._state == NotCanceledState
                 x._state = NotifyingState
 
@@ -162,6 +177,9 @@ else # VERSION < v"1.7"
                     x._timer = nothing
                 end
 
+                cbs = copy(x._callbacks)
+                empty!(x._callbacks)
+
                 # Notify the event but keep it alive — its `set` flag ensures
                 # any future wait() calls return immediately.
                 if x._kernel_event !== nothing
@@ -169,6 +187,16 @@ else # VERSION < v"1.7"
                 end
 
                 x._state = NotifyingCompleteState
+                return cbs
+            end
+            return Pair{Int,Any}[]
+        end
+
+        # Invoke registered callbacks synchronously (like .NET).
+        for (_, cb) in callbacks
+            try
+                cb()
+            catch
             end
         end
     end
@@ -344,37 +372,132 @@ Return the [`CancellationToken`](@ref) that caused the exception.
 get_token(x::OperationCanceledException) = x._token
 
 # ---------------------------------------------------------------------------
-# Combined source (shared — only uses public API + _internal_notify)
+# CancellationTokenRegistration — handle for deregistering a callback
+# ---------------------------------------------------------------------------
+
+"""
+    CancellationTokenRegistration
+
+A handle returned by [`register`](@ref) that can be used to deregister the
+callback via `close(registration)`.  Closing is idempotent and thread-safe.
+"""
+struct CancellationTokenRegistration
+    _source::CancellationTokenSource
+    _id::Int
+end
+
+"""
+    close(registration::CancellationTokenRegistration)
+
+Deregister a previously registered callback.  After this call the callback
+will not be invoked, even if the source is later cancelled.  No-op if the
+callback was already deregistered or if the source has already been cancelled.
+"""
+function Base.close(r::CancellationTokenRegistration)
+    lock(r._source._lock) do
+        idx = findfirst(p -> p.first == r._id, r._source._callbacks)
+        if idx !== nothing
+            deleteat!(r._source._callbacks, idx)
+        end
+    end
+    nothing
+end
+
+# ---------------------------------------------------------------------------
+# register — synchronous callback registration (matching .NET)
+# ---------------------------------------------------------------------------
+
+"""
+    register(callback, token::CancellationToken) -> CancellationTokenRegistration
+    register(callback, src::CancellationTokenSource) -> CancellationTokenRegistration
+
+Register `callback` (a zero-argument callable) to be invoked synchronously
+when `cancel` is called on the token's source.  If the token is already
+cancelled, `callback` is invoked immediately before returning.
+
+Returns a [`CancellationTokenRegistration`](@ref) that can be `close`d to
+deregister the callback.
+
+Callbacks are invoked synchronously during `cancel()`, so they should be
+non-blocking and fast — similar to .NET's
+`CancellationToken.Register(Action)`.
+
+# Examples
+
+```julia
+src = CancellationTokenSource()
+reg = register(get_token(src)) do
+    @info "Cancelled!"
+end
+cancel(src)  # prints "Cancelled!"
+```
+
+```julia
+# Deregister before cancel — callback is NOT invoked
+src = CancellationTokenSource()
+reg = register(get_token(src)) do
+    error("should not run")
+end
+close(reg)
+cancel(src)  # nothing happens
+```
+"""
+function register(callback, token::CancellationToken)
+    _register(callback, token._source)
+end
+
+function register(callback, src::CancellationTokenSource)
+    _register(callback, src)
+end
+
+function _register(callback, src::CancellationTokenSource)
+    # Fast path: already cancelled — invoke immediately.
+    if is_cancellation_requested(src)
+        callback()
+        return CancellationTokenRegistration(src, 0)
+    end
+
+    id = lock(src._lock) do
+        # Double-check under lock: cancel() may have won the race.
+        if is_cancellation_requested(src)
+            return nothing
+        end
+        cb_id = src._next_callback_id
+        src._next_callback_id = cb_id + 1
+        push!(src._callbacks, cb_id => callback)
+        return cb_id
+    end
+
+    if id === nothing
+        # Source was cancelled between the fast-path check and acquiring
+        # the lock — invoke immediately.
+        callback()
+        return CancellationTokenRegistration(src, 0)
+    end
+
+    return CancellationTokenRegistration(src, id)
+end
+
+# ---------------------------------------------------------------------------
+# Combined source (shared — uses register instead of spawning tasks)
 # ---------------------------------------------------------------------------
 
 function CancellationTokenSource(tokens::CancellationToken...)
     x = CancellationTokenSource()
 
-    # Fast-path: if any parent token is already cancelled, skip spawning
-    # monitoring tasks entirely.
+    # Fast-path: if any parent token is already cancelled, skip registration.
     if any(is_cancellation_requested, tokens)
         _internal_notify(x)
         return x
     end
 
-    # Each monitoring task simply waits on its token and then notifies x.
-    # _internal_notify is idempotent (CAS-guarded), so multiple tasks
-    # calling it concurrently is safe.  We deliberately do NOT try to
-    # cancel sibling tasks via schedule() — doing so can corrupt Julia's
-    # workqueue when the sibling is currently running on another thread.
-    # The "losing" tasks will unblock naturally when their parent tokens
-    # are eventually cancelled or GC'd.
+    # Register a callback on each parent token.  When any parent fires,
+    # _internal_notify(x) is called synchronously — no tasks are spawned.
+    # _internal_notify is idempotent (CAS-guarded), so multiple callbacks
+    # calling it concurrently is safe.
     for token in tokens
-        @static if VERSION >= v"1.3"
-            Threads.@spawn begin
-                wait(token)
-                _internal_notify(x)
-            end
-        else
-            @async begin
-                wait(token)
-                _internal_notify(x)
-            end
+        register(token) do
+            _internal_notify(x)
         end
     end
 

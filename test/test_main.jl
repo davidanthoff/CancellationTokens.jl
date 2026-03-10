@@ -256,3 +256,114 @@ end
 @testitem "OperationCanceledException is a subtype of Exception" begin
     @test OperationCanceledException <: Exception
 end
+
+# ---------------------------------------------------------------------------
+# register / CancellationTokenRegistration
+# ---------------------------------------------------------------------------
+
+@testitem "register callback invoked on cancel" begin
+    src = CancellationTokenSource()
+    called = Ref(false)
+    register(get_token(src)) do
+        called[] = true
+    end
+    @test !called[]
+    cancel(src)
+    @test called[]
+end
+
+@testitem "register on already-cancelled token invokes immediately" begin
+    src = CancellationTokenSource()
+    cancel(src)
+    called = Ref(false)
+    register(get_token(src)) do
+        called[] = true
+    end
+    @test called[]
+end
+
+@testitem "register with source directly" begin
+    src = CancellationTokenSource()
+    called = Ref(false)
+    register(src) do
+        called[] = true
+    end
+    cancel(src)
+    @test called[]
+end
+
+@testitem "deregistration prevents callback invocation" begin
+    src = CancellationTokenSource()
+    called = Ref(false)
+    reg = register(get_token(src)) do
+        called[] = true
+    end
+    close(reg)
+    cancel(src)
+    @test !called[]
+end
+
+@testitem "deregistration is idempotent" begin
+    src = CancellationTokenSource()
+    reg = register(get_token(src)) do
+        nothing
+    end
+    close(reg)
+    close(reg)  # should not error
+    @test true
+end
+
+@testitem "multiple callbacks all invoked" begin
+    src = CancellationTokenSource()
+    results = Int[]
+    for i in 1:5
+        register(get_token(src)) do
+            push!(results, i)
+        end
+    end
+    cancel(src)
+    @test sort(results) == [1, 2, 3, 4, 5]
+end
+
+@testitem "callback error does not prevent other callbacks" begin
+    src = CancellationTokenSource()
+    called = Ref(false)
+    register(get_token(src)) do
+        error("boom")
+    end
+    register(get_token(src)) do
+        called[] = true
+    end
+    cancel(src)
+    @test called[]
+end
+
+@testitem "combined source uses register (no tasks spawned)" begin
+    src1 = CancellationTokenSource()
+    src2 = CancellationTokenSource()
+    combined = CancellationTokenSource(get_token(src1), get_token(src2))
+
+    # Cancellation should propagate synchronously via callbacks
+    @test !is_cancellation_requested(combined)
+    cancel(src1)
+    # No sleep needed — callback is synchronous
+    @test is_cancellation_requested(combined)
+end
+
+@testitem "combined source propagates synchronously from second parent" begin
+    src1 = CancellationTokenSource()
+    src2 = CancellationTokenSource()
+    combined = CancellationTokenSource(get_token(src1), get_token(src2))
+
+    cancel(src2)
+    @test is_cancellation_requested(combined)
+    @test !is_cancellation_requested(src1)
+end
+
+@testitem "register returns CancellationTokenRegistration" begin
+    src = CancellationTokenSource()
+    reg = register(get_token(src)) do
+        nothing
+    end
+    @test reg isa CancellationTokenRegistration
+end
