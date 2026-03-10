@@ -137,6 +137,68 @@ function my_blocking_op(token::CancellationToken)
 end
 ```
 
+## Callback Registration
+
+Instead of spawning a task to watch for cancellation, you can register a
+callback that is invoked synchronously when `cancel` is called — matching
+.NET's `CancellationToken.Register(Action)`:
+
+```julia
+src = CancellationTokenSource()
+token = get_token(src)
+
+reg = register(token) do
+    println("Cancelled!")
+end
+
+cancel(src)   # prints "Cancelled!" immediately, inline with cancel()
+```
+
+Callbacks are invoked synchronously during `cancel()`, so they should be
+non-blocking and fast.
+
+If the token is already cancelled when `register` is called, the callback is
+invoked immediately before `register` returns.
+
+### Deregistration
+
+`register` returns a [`CancellationTokenRegistration`](@ref) handle.  Call
+`close` on it to prevent the callback from being invoked:
+
+```julia
+src = CancellationTokenSource()
+reg = register(get_token(src)) do
+    error("should not run")
+end
+
+close(reg)     # deregister
+cancel(src)    # callback is NOT invoked
+```
+
+Deregistration is idempotent — calling `close` multiple times is safe.
+
+### Use Cases
+
+Callback registration is useful when you need to perform a side effect on
+cancellation without spawning a monitoring task:
+
+```julia
+# Close a socket when cancelled
+reg = register(token) do
+    close(socket)
+end
+
+try
+    process(socket)
+finally
+    close(reg)   # clean up registration if we finish normally
+end
+```
+
+It is also how combined sources (`CancellationTokenSource(token1, token2, ...)`)
+are implemented internally — each parent token registers a callback instead of
+spawning a monitoring task.
+
 ## Resource Cleanup
 
 [`CancellationTokenSource`](@ref) implements `close`, which is equivalent to [`cancel`](@ref). This enables `do`-block patterns for scoped cancellation:
@@ -146,6 +208,6 @@ src = CancellationTokenSource()
 try
     run_operation(get_token(src))
 finally
-    close(src)  # ensures timer and monitoring tasks are cleaned up
+    close(src)  # ensures timer and callbacks are cleaned up
 end
 ```

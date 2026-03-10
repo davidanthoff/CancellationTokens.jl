@@ -13,8 +13,9 @@ The package follows .NET's design:
 1. Create a [`CancellationTokenSource`](@ref).
 2. Obtain a [`CancellationToken`](@ref) with [`get_token`](@ref).
 3. Pass the token to cancellable operations as the **last positional argument**.
-4. Call [`cancel`](@ref) on the source when the operation should stop.
-5. Operations throw an [`OperationCanceledException`](@ref) on cancellation.
+4. Optionally [`register`](@ref) callbacks to run synchronously on cancellation.
+5. Call [`cancel`](@ref) on the source when the operation should stop.
+6. Operations throw an [`OperationCanceledException`](@ref) on cancellation.
 
 ```julia
 using CancellationTokens
