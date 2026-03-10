@@ -351,54 +351,29 @@ function CancellationTokenSource(tokens::CancellationToken...)
     x = CancellationTokenSource()
 
     # Fast-path: if any parent token is already cancelled, skip spawning
-    # monitoring tasks entirely.  This avoids a race where a spawned task
-    # completes instantly and calls `schedule()` on a sibling task that
-    # has not started running yet, corrupting Julia's workqueue.
+    # monitoring tasks entirely.
     if any(is_cancellation_requested, tokens)
         _internal_notify(x)
         return x
     end
 
-    tasks = Vector{Task}(undef, length(tokens))
-
-    for (i,token) in enumerate(tokens)
-        tasks[i] = @static if VERSION >= v"1.3"
-            Threads.@spawn try
+    # Each monitoring task simply waits on its token and then notifies x.
+    # _internal_notify is idempotent (CAS-guarded), so multiple tasks
+    # calling it concurrently is safe.  We deliberately do NOT try to
+    # cancel sibling tasks via schedule() — doing so can corrupt Julia's
+    # workqueue when the sibling is currently running on another thread.
+    # The "losing" tasks will unblock naturally when their parent tokens
+    # are eventually cancelled or GC'd.
+    for token in tokens
+        @static if VERSION >= v"1.3"
+            Threads.@spawn begin
                 wait(token)
                 _internal_notify(x)
-
-                for (j,task) in enumerate(tasks)
-                    if j != i
-                        try
-                            schedule(task, WaitCanceledException(), error=true)
-                        catch
-                            # Task may have already completed
-                        end
-                    end
-                end
-            catch err
-                if !(err isa WaitCanceledException)
-                    rethrow(err)
-                end
             end
         else
-            @async try
+            @async begin
                 wait(token)
                 _internal_notify(x)
-
-                for (j,task) in enumerate(tasks)
-                    if j != i
-                        try
-                            schedule(task, WaitCanceledException(), error=true)
-                        catch
-                            # Task may have already completed
-                        end
-                    end
-                end
-            catch err
-                if !(err isa WaitCanceledException)
-                    rethrow(err)
-                end
             end
         end
     end

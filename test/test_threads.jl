@@ -104,3 +104,72 @@ end
         @test_throws OperationCanceledException sleep(60.0, get_token(src))
     end
 end
+
+@testitem "Stress: simultaneous cancel of both parents in combined source" begin
+    # Exercises the race where two monitoring tasks inside a combined source
+    # fire at the same time.  Before the fix, each task would call
+    # schedule() on its sibling, corrupting the workqueue.
+    for _ in 1:200
+        src1 = CancellationTokenSource()
+        src2 = CancellationTokenSource()
+        combined = CancellationTokenSource(get_token(src1), get_token(src2))
+        # Cancel both parents as close together as possible.
+        t1 = Threads.@spawn cancel(src1)
+        t2 = Threads.@spawn cancel(src2)
+        wait(t1)
+        wait(t2)
+        wait(get_token(combined))
+        @test is_cancellation_requested(combined)
+    end
+end
+
+@testitem "Stress: cancel token while channel data arrives" begin
+    # Exercises the race where the monitoring task is executing
+    # lock(c) do notify(cond) end on one thread while the main task
+    # finishes and tries to clean up the monitoring task.
+    for _ in 1:200
+        src = CancellationTokenSource()
+        ch = Channel{Int}(1)
+        token = get_token(src)
+
+        # Race: put data and cancel at the same time
+        t1 = Threads.@spawn put!(ch, 42)
+        t2 = Threads.@spawn cancel(src)
+
+        result = try
+            take!(ch, token)
+        catch e
+            e isa OperationCanceledException ? :cancelled : rethrow(e)
+        end
+        @test result === 42 || result === :cancelled
+        wait(t1)
+        wait(t2)
+    end
+end
+
+@testitem "Stress: cancel token while waiting on channel" begin
+    for _ in 1:200
+        src = CancellationTokenSource()
+        ch = Channel{Int}(1)
+        token = get_token(src)
+
+        t1 = Threads.@spawn begin
+            sleep(0.001)
+            put!(ch, 1)
+        end
+        t2 = Threads.@spawn begin
+            sleep(0.001)
+            cancel(src)
+        end
+
+        result = try
+            wait(ch, token)
+            :ready
+        catch e
+            e isa OperationCanceledException ? :cancelled : rethrow(e)
+        end
+        @test result === :ready || result === :cancelled
+        wait(t1)
+        wait(t2)
+    end
+end

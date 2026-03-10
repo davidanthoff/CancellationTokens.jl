@@ -57,29 +57,28 @@ Read a line from `socket`, but abort with an error if `token` is cancelled
 before data arrives.
 """
 function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
-    t = @async try
+    done = Threads.Atomic{Bool}(false)
+
+    @async begin
         wait(token)
 
-        # s.cond is a GenericCondition with its own lock; notify requires
-        # holding the condition's lock, not the stream's ReentrantLock.
-        lock(s.cond) do
-            notify(s.cond, OperationCanceledException(token); error=true)
-        end
-    catch err
-        if !(err isa WaitCanceledException)
-            Base.display_error(err, catch_backtrace())
+        # Only notify if the main task hasn't finished yet.
+        # Atomic xchg ensures exactly one side (cancel vs normal completion)
+        # wins, avoiding schedule() on a potentially-running task.
+        if !Threads.atomic_xchg!(done, true)
+            # s.cond is a GenericCondition with its own lock; notify requires
+            # holding the condition's lock, not the stream's ReentrantLock.
+            lock(s.cond) do
+                notify(s.cond, OperationCanceledException(token); error=true)
+            end
         end
     end
 
     try
         return readline(s; keep=keep)
     finally
-        # Clean up the monitoring task when readline completes normally.
-        try
-            schedule(t, WaitCanceledException(), error=true)
-        catch
-            # Task may have already completed
-        end
+        # Signal to the monitoring task that it should not notify.
+        Threads.atomic_xchg!(done, true)
     end
 end
 
@@ -109,26 +108,24 @@ function Base.wait(c::Channel, token::CancellationToken)
 
     cond = _channel_wait_cond(c)
 
-    t = @static if VERSION >= v"1.3"
-        Threads.@spawn try
+    done = Threads.Atomic{Bool}(false)
+
+    @static if VERSION >= v"1.3"
+        Threads.@spawn begin
             wait(token)
-            lock(c) do
-                notify(cond)
-            end
-        catch err
-            if !(err isa WaitCanceledException)
-                rethrow(err)
+            if !Threads.atomic_xchg!(done, true)
+                lock(c) do
+                    notify(cond)
+                end
             end
         end
     else
-        @async try
+        @async begin
             wait(token)
-            lock(c) do
-                notify(cond)
-            end
-        catch err
-            if !(err isa WaitCanceledException)
-                rethrow(err)
+            if !Threads.atomic_xchg!(done, true)
+                lock(c) do
+                    notify(cond)
+                end
             end
         end
     end
@@ -142,11 +139,7 @@ function Base.wait(c::Channel, token::CancellationToken)
         end
     finally
         unlock(c)
-        try
-            schedule(t, WaitCanceledException(), error=true)
-        catch
-            # Task may have already completed
-        end
+        Threads.atomic_xchg!(done, true)
     end
     nothing
 end
@@ -185,29 +178,28 @@ end
 function _take_buffered_cancellable(c::Channel, token::CancellationToken)
     lock(c)
     try
-        t = @static if VERSION >= v"1.3"
-            Threads.@spawn try
+        done = Threads.Atomic{Bool}(false)
+
+        @static if VERSION >= v"1.3"
+            Threads.@spawn begin
                 wait(token)
-                lock(c) do
-                    notify(c.cond_take)
-                end
-            catch err
-                if !(err isa WaitCanceledException)
-                    rethrow(err)
+                if !Threads.atomic_xchg!(done, true)
+                    lock(c) do
+                        notify(c.cond_take)
+                    end
                 end
             end
         else
-            @async try
+            @async begin
                 wait(token)
-                lock(c) do
-                    notify(c.cond_take)
-                end
-            catch err
-                if !(err isa WaitCanceledException)
-                    rethrow(err)
+                if !Threads.atomic_xchg!(done, true)
+                    lock(c) do
+                        notify(c.cond_take)
+                    end
                 end
             end
         end
+
         try
             while isempty(c.data)
                 is_cancellation_requested(token) && throw(OperationCanceledException(token))
@@ -222,11 +214,7 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
             notify(c.cond_put, nothing, false, false) # notify only one, since only one slot has become available for a put!.
             return v
         finally
-            try
-                schedule(t, WaitCanceledException(), error=true)
-            catch
-                # Task may have already completed
-            end
+            Threads.atomic_xchg!(done, true)
         end
     finally
         unlock(c)
