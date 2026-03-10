@@ -350,6 +350,15 @@ get_token(x::OperationCanceledException) = x._token
 function CancellationTokenSource(tokens::CancellationToken...)
     x = CancellationTokenSource()
 
+    # Fast-path: if any parent token is already cancelled, skip spawning
+    # monitoring tasks entirely.  This avoids a race where a spawned task
+    # completes instantly and calls `schedule()` on a sibling task that
+    # has not started running yet, corrupting Julia's workqueue.
+    if any(is_cancellation_requested, tokens)
+        _internal_notify(x)
+        return x
+    end
+
     tasks = Vector{Task}(undef, length(tokens))
 
     for (i,token) in enumerate(tokens)

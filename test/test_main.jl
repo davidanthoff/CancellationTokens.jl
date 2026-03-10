@@ -193,6 +193,20 @@ end
     @test is_cancellation_requested(combined)
 end
 
+@testitem "Combined source with already-cancelled token stress test" begin
+    # Regression test: creating a combined source with an already-cancelled
+    # parent must not corrupt Julia's task workqueue.  The bug manifested as
+    # `TypeError(expected=Task, got=nothing)` in `popfirst!(Workqueue)`.
+    for _ in 1:200
+        src1 = CancellationTokenSource()
+        cancel(src1)
+        src2 = CancellationTokenSource()
+        combined = CancellationTokenSource(get_token(src1), get_token(src2))
+        @test is_cancellation_requested(combined)
+        @test !is_cancellation_requested(src2)
+    end
+end
+
 @testitem "Combined source with single token" begin
     src = CancellationTokenSource()
     combined = CancellationTokenSource(get_token(src))
