@@ -59,17 +59,17 @@ before data arrives.
 function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
     done = Threads.Atomic{Bool}(false)
 
-    @async begin
-        wait(token)
-
-        # Only notify if the main task hasn't finished yet.
-        # Atomic xchg ensures exactly one side (cancel vs normal completion)
-        # wins, avoiding schedule() on a potentially-running task.
+    # Register a callback that enqueues socket notification work.
+    # Running lock/notify directly inside cancel() can deadlock because
+    # register callbacks are executed synchronously by cancel().
+    reg = register(token) do
         if !Threads.atomic_xchg!(done, true)
-            # s.cond is a GenericCondition with its own lock; notify requires
-            # holding the condition's lock, not the stream's ReentrantLock.
-            lock(s.cond) do
-                notify(s.cond, OperationCanceledException(token); error=true)
+            @async begin
+                # s.cond is a GenericCondition with its own lock; notify requires
+                # holding the condition's lock, not the stream's ReentrantLock.
+                lock(s.cond) do
+                    notify(s.cond, OperationCanceledException(token); error=true)
+                end
             end
         end
     end
@@ -77,7 +77,9 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     try
         return readline(s; keep=keep)
     finally
-        # Signal to the monitoring task that it should not notify.
+        # Deregister the callback to prevent notification after completion.
+        close(reg)
+        # Signal to the callback that it should not notify if it fires anyway.
         Threads.atomic_xchg!(done, true)
     end
 end
@@ -110,19 +112,12 @@ function Base.wait(c::Channel, token::CancellationToken)
 
     done = Threads.Atomic{Bool}(false)
 
-    @static if VERSION >= v"1.3"
-        Threads.@spawn begin
-            wait(token)
-            if !Threads.atomic_xchg!(done, true)
-                lock(c) do
-                    notify(cond)
-                end
-            end
-        end
-    else
-        @async begin
-            wait(token)
-            if !Threads.atomic_xchg!(done, true)
+    # Register a callback that enqueues channel notification work.
+    # Running lock/notify directly inside cancel() can deadlock because
+    # register callbacks are executed synchronously by cancel().
+    reg = register(token) do
+        if !Threads.atomic_xchg!(done, true)
+            @async begin
                 lock(c) do
                     notify(cond)
                 end
@@ -139,6 +134,9 @@ function Base.wait(c::Channel, token::CancellationToken)
         end
     finally
         unlock(c)
+        # Deregister the callback to prevent notification after completion.
+        close(reg)
+        # Signal to the callback that it should not notify if it fires anyway.
         Threads.atomic_xchg!(done, true)
     end
     nothing
@@ -180,19 +178,12 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
     try
         done = Threads.Atomic{Bool}(false)
 
-        @static if VERSION >= v"1.3"
-            Threads.@spawn begin
-                wait(token)
-                if !Threads.atomic_xchg!(done, true)
-                    lock(c) do
-                        notify(c.cond_take)
-                    end
-                end
-            end
-        else
-            @async begin
-                wait(token)
-                if !Threads.atomic_xchg!(done, true)
+        # Register a callback that enqueues channel notification work.
+        # Running lock/notify directly inside cancel() can deadlock because
+        # register callbacks are executed synchronously by cancel().
+        reg = register(token) do
+            if !Threads.atomic_xchg!(done, true)
+                @async begin
                     lock(c) do
                         notify(c.cond_take)
                     end
@@ -214,6 +205,9 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
             notify(c.cond_put, nothing, false, false) # notify only one, since only one slot has become available for a put!.
             return v
         finally
+            # Deregister the callback to prevent notification after completion.
+            close(reg)
+            # Signal to the callback that it should not notify if it fires anyway.
             Threads.atomic_xchg!(done, true)
         end
     finally
