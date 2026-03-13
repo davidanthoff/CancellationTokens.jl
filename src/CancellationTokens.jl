@@ -146,7 +146,9 @@ end
         end
 
         # Signal the event if a waiter has installed one.
-        event = @atomic :acquire x._kernel_event
+        # seq_cst load required: together with the seq_cst CAS on _kernel_event in wait(),
+        # this ensures at least one side sees the other's write.
+        event = @atomic x._kernel_event
         if event !== nothing
             notify(event)
         end
@@ -162,8 +164,9 @@ end
         @atomic :release x._state = NotifyingCompleteState
     end
 
-    # Single atomic read — equivalent to .NET's volatile read of _state.
-    is_cancellation_requested(x::CancellationTokenSource) = (@atomic :acquire x._state) > NotCanceledState
+    # seq_cst load required: together with the seq_cst CAS on _state in _internal_notify(),
+    # this ensures at least one side of the wait()/cancel() double-check sees the other's write.
+    is_cancellation_requested(x::CancellationTokenSource) = (@atomic x._state) > NotCanceledState
 
 else # VERSION < v"1.7"
 
@@ -254,6 +257,12 @@ get_token(x::CancellationTokenSource) = CancellationToken(x)
 Return `true` if [`cancel`](@ref) has been called (or a timeout has expired).
 This is a non-blocking, lock-free check on Julia 1.7+.
 
+On Julia 1.7+, the read uses sequentially-consistent (`seq_cst`) atomic ordering.
+This is stronger than a plain acquire load, and is required to ensure soundness of
+the double-check inside [`wait`](@ref): after a `seq_cst` CAS installs a kernel event,
+a `seq_cst` load of `_state` guarantees that at least one of the two threads
+(the waiter or the canceller) observes the other's write, preventing a missed wakeup.
+
 # Examples
 
 ```julia
@@ -291,8 +300,9 @@ is_cancellation_requested(x::CancellationToken) = is_cancellation_requested(x._s
 
         # Double-check: if cancel() already ran, it may have read
         # _kernel_event as nothing and skipped notify().
-        # The seq_cst CAS on _kernel_event and the seq_cst CAS on _state
-        # guarantee that at least one side observes the other's write.
+        # The seq_cst CAS on _kernel_event (above) and the seq_cst CAS on _state
+        # (in _internal_notify) guarantee that at least one side observes the other's write,
+        # because is_cancellation_requested() uses a seq_cst load of _state.
         # notify() is idempotent, so double-signaling is harmless.
         if is_cancellation_requested(x)
             notify(event)
