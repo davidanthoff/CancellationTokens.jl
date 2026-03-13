@@ -53,34 +53,68 @@ end
     readline(socket::Union{Sockets.PipeEndpoint, Sockets.TCPSocket},
              token::CancellationToken; keep=false)
 
-Read a line from `socket`, but abort with an error if `token` is cancelled
-before data arrives.
+Read a line from `socket`, but throw [`OperationCanceledException`](@ref) if
+`token` is cancelled before data arrives.
+
+!!! warning "Cancellation closes the socket"
+    When `token` is cancelled, the underlying socket is **closed** to unblock
+    the read.  This means the socket is no longer usable after cancellation.
+
+    This is the only safe way to interrupt a socket read without corrupting
+    other tasks that may be waiting on the same socket condition variable.
+    Closing the socket ensures all readers receive a clean I/O error rather
+    than having a foreign `OperationCanceledException` injected into
+    unrelated tasks.
+
+    For most timeout use cases this is the desired behaviour — if a read
+    timed out, the protocol-level state is typically indeterminate anyway
+    and the connection should be re-established.
+
+# Examples
+
+```julia
+src = CancellationTokenSource(5.0)  # 5 s timeout
+try
+    line = readline(socket, get_token(src))
+catch ex
+    if ex isa OperationCanceledException
+        # socket has been closed; reconnect if needed
+    end
+end
+```
 """
 function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
-    done = Threads.Atomic{Bool}(false)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
 
-    # Register a callback that enqueues socket notification work.
-    # Running lock/notify directly inside cancel() can deadlock because
-    # register callbacks are executed synchronously by cancel().
+    # Register a callback that closes the socket on cancellation.
+    # close() unblocks any pending reads, which we then detect and
+    # translate into OperationCanceledException.
+    # The callback is run via @async to avoid deadlocking inside cancel(),
+    # since register callbacks execute synchronously.
     reg = register(token) do
-        if !Threads.atomic_xchg!(done, true)
-            @async begin
-                # s.cond is a GenericCondition with its own lock; notify requires
-                # holding the condition's lock, not the stream's ReentrantLock.
-                lock(s.cond) do
-                    notify(s.cond, OperationCanceledException(token); error=true)
-                end
-            end
-        end
+        @async close(s)
     end
 
     try
-        return readline(s; keep=keep)
+        result = readline(s; keep=keep)
+        # readline returns "" on a closed socket without throwing.
+        # Check if cancellation caused the close.
+        if is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        return result
+    catch ex
+        # If cancellation caused the socket to close, translate the resulting
+        # I/O error into OperationCanceledException.
+        if ex isa OperationCanceledException
+            rethrow()
+        end
+        if is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        rethrow()
     finally
-        # Deregister the callback to prevent notification after completion.
         close(reg)
-        # Signal to the callback that it should not notify if it fires anyway.
-        Threads.atomic_xchg!(done, true)
     end
 end
 
