@@ -7,10 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- Improved robustness of cancellable `Base` overloads (`readline`, `wait(::Channel, ...)`, and `take!(::Channel, ...)`) by using callback registration that enqueues notifications asynchronously and deregisters callbacks on completion to avoid deadlock-prone cancellation paths.
+
+## [1.2.0] - 2026-03-10
+
 ### Added
 
 - `register(callback, token)` to register a callback that is invoked synchronously when `cancel` is called, matching .NET's `CancellationToken.Register(Action)`. If the token is already cancelled, the callback is invoked immediately.
 - `CancellationTokenRegistration` struct returned by `register`, with `close(registration)` for deregistration (matching .NET's `CancellationTokenRegistration.Dispose()`).
+- Expanded test suite for callback registration.
+
+### Changed
+
+- Combined `CancellationTokenSource(tokens...)` now uses synchronous callbacks (`register`) instead of spawning monitoring tasks (`Threads.@spawn`/`@async`). Cancellation propagation is now immediate and deterministic, and eliminates `InterruptException` errors from orphaned monitoring tasks.
+- `CancellationTokenSource` struct now includes `_callbacks` and `_next_callback_id` fields for callback registration (internal; no public API change beyond the new `register` function).
+- `_internal_notify` now invokes registered callbacks synchronously during cancellation, after notifying the event. Each callback is wrapped in `try/catch` so one failure does not prevent others from running.
+
+### Fixed
+
+- `InterruptException` in monitoring tasks spawned by `CancellationTokenSource(tokens...)`. These tasks had no error handling and could throw when interrupted during cleanup. Fixed by replacing task-based monitoring with synchronous callback registration.
+
+## [1.1.1] - 2026-03-10
+
+### Fixed
+
+- Race condition in `wait(::CancellationToken)` where `cancel()` could fire between the `is_cancellation_requested` check and the `wait(event)` call, causing a hang. Fixed via double-check after event installation on Julia 1.7+ and lock-based atomic check on older versions.
+
+## [1.1.0] - 2026-03-09
+
+### Added
+
 - `CancellationToken` is now an explicit export (previously usable but not exported).
 - `Base.take!(::Channel, ::CancellationToken)` for cancellable channel take operations (buffered channels only).
 - `Base.wait(::Channel, ::CancellationToken)` for cancellable channel wait operations.
@@ -21,25 +49,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Lock-free `wait(::CancellationToken)` using CAS on Julia 1.7+ with double-check to prevent missed notifications.
 - Documentation site via Documenter.jl with API reference, base method overloads, and usage guide.
 - Thread-safety tests (`test_threads.jl`).
-- Expanded test suite for base method overloads, channels, sockets, core functionality, and callback registration.
+- Expanded test suite for base method overloads, channels, sockets, and core functionality.
 - `Sockets` stdlib dependency for cancellable `readline`.
 
 ### Changed
 
-- Combined `CancellationTokenSource(tokens...)` now uses synchronous callbacks (`register`) instead of spawning monitoring tasks (`Threads.@spawn`/`@async`). Cancellation propagation is now immediate and deterministic, and eliminates `InterruptException` errors from orphaned monitoring tasks.
-- `CancellationTokenSource` struct now includes `_callbacks` and `_next_callback_id` fields for callback registration (internal; no public API change beyond the new `register` function).
-- `_internal_notify` now invokes registered callbacks synchronously during cancellation, after notifying the event. Each callback is wrapped in `try/catch` so one failure does not prevent others from running.
 - `CancellationTokenSource` struct now includes a `_lock::ReentrantLock` field (internal; no public API change).
 - `_internal_notify` is now thread-safe, using CAS on Julia 1.7+ and lock-based state transitions on older versions.
 - `_waithandle` / event creation uses CAS on Julia 1.7+ so multiple threads cannot create duplicate events.
 - `Base.sleep(::Real, ::CancellationToken)` now uses `try/finally` to ensure the internal timer is always closed, and calls `cancel` for cleanup rather than checking `is_cancellation_requested` on the timer source.
 - Timer constructor now calls `cancel(x)` (public API) instead of `_internal_notify(x)` directly.
 - CI updated to use `TestItemRunner` workflow.
-
-### Fixed
-
-- `InterruptException` in monitoring tasks spawned by `CancellationTokenSource(tokens...)`. These tasks had no error handling and could throw when interrupted during cleanup. Fixed by replacing task-based monitoring with synchronous callback registration.
-- Race condition in `wait(::CancellationToken)` where `cancel()` could fire between the `is_cancellation_requested` check and the `wait(event)` call, causing a hang. Fixed via double-check after event installation on Julia 1.7+ and lock-based atomic check on older versions.
 
 ## [1.0.0] - 2021-07-11
 
@@ -59,5 +79,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Event` polyfill for Julia < 1.1.
 - Support for Julia 1.0+.
 
-[Unreleased]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.0.0...HEAD
+[Unreleased]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.1.1...v1.2.0
+[1.1.1]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.1.0...v1.1.1
+[1.1.0]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/davidanthoff/CancellationTokens.jl/releases/tag/v1.0.0
