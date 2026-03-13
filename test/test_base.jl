@@ -199,6 +199,105 @@ end
     end
 end
 
+# ---------------------------------------------------------------------------
+# Regression tests for data race fix (issue #23)
+# Ensure that cancellation callbacks don't inject spurious notifications
+# into shared condition variables after the main operation completes.
+# ---------------------------------------------------------------------------
+
+@testitem "wait(Channel) - cancel after data arrives does not leak notifications" begin
+    # Simulate: data arrives, then cancel fires immediately after.
+    # A second waiter on the same channel must NOT be spuriously woken.
+    for _ in 1:50  # repeat to exercise timing
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+
+        # Put data so that wait returns, then cancel right after.
+        put!(ch, 1)
+        wait(ch, get_token(src))
+        cancel(src)
+        yield()  # let any stray async tasks run
+
+        # A second wait with a fresh token must still block (channel was
+        # not taken from, so data is still there — isready returns true
+        # and wait returns immediately). This verifies no error was injected.
+        src2 = CancellationTokenSource()
+        wait(ch, get_token(src2))
+        @test isready(ch)
+    end
+end
+
+@testitem "take!(Channel) - cancel after take succeeds does not leak notifications" begin
+    for _ in 1:50
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+
+        put!(ch, 42)
+        v = take!(ch, get_token(src))
+        @test v == 42
+        cancel(src)
+        yield()
+
+        # A second waiter should block normally, not get a spurious wakeup.
+        src2 = CancellationTokenSource(0.1)
+        @test_throws OperationCanceledException take!(ch, get_token(src2))
+    end
+end
+
+@testitem "wait(Channel) - concurrent cancel and data arrival" begin
+    for _ in 1:20
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+        token = get_token(src)
+
+        # Race: put data and cancel at roughly the same time.
+        @async begin
+            yield()
+            put!(ch, 1)
+        end
+        @async begin
+            yield()
+            cancel(src)
+        end
+
+        # Should either return normally or throw OperationCanceledException.
+        try
+            wait(ch, token)
+        catch ex
+            @test ex isa OperationCanceledException
+        end
+
+        # Channel must still be usable regardless of outcome.
+        if isready(ch)
+            @test take!(ch) == 1
+        end
+    end
+end
+
+@testitem "take!(Channel) - concurrent cancel and data arrival" begin
+    for _ in 1:20
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+        token = get_token(src)
+
+        @async begin
+            yield()
+            put!(ch, 99)
+        end
+        @async begin
+            yield()
+            cancel(src)
+        end
+
+        try
+            v = take!(ch, token)
+            @test v == 99
+        catch ex
+            @test ex isa OperationCanceledException
+        end
+    end
+end
+
 @testitem "take!(Channel) - closed empty channel throws" begin
     src = CancellationTokenSource()
     ch = Channel{Int}(10)
