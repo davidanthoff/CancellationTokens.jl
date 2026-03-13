@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="UTF-8"/><meta name="viewport" content="width=device-width, initial-scale=1.0"/><title>Guide · CancellationTokens.jl</title><meta name="title" content="Guide · CancellationTokens.jl"/><meta property="og:title" content="Guide · CancellationTokens.jl"/><meta property="twitter:title" content="Guide · CancellationTokens.jl"/><meta name="description" content="Documentation for CancellationTokens.jl."/><meta property="og:description" content="Documentation for CancellationTokens.jl."/><meta property="twitter:description" content="Documentation for CancellationTokens.jl."/><script data-outdated-warner src="../assets/warner.js"></script><link href="https://cdnjs.cloudflare.com/ajax/libs/lato-font/3.0.0/css/lato-font.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/juliamono/0.050/juliamono.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/fontawesome.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/solid.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/brands.min.css" rel="stylesheet" type="text/css"/><link href="https://cdnjs.cloudflare.com/ajax/libs/KaTeX/0.16.8/katex.min.css" rel="stylesheet" type="text/css"/><script>documenterBaseURL=".."</script><script src="https://cdnjs.cloudflare.com/ajax/libs/require.js/2.3.6/require.min.js" data-main="../assets/documenter.js"></script><script src="../search_index.js"></script><script src="../siteinfo.js"></script><script src="../../versions.js"></script><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-mocha.css" data-theme-name="catppuccin-mocha"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-macchiato.css" data-theme-name="catppuccin-macchiato"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-frappe.css" data-theme-name="catppuccin-frappe"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/catppuccin-latte.css" data-theme-name="catppuccin-latte"/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-dark.css" data-theme-name="documenter-dark" data-theme-primary-dark/><link class="docs-theme-link" rel="stylesheet" type="text/css" href="../assets/themes/documenter-light.css" data-theme-name="documenter-light" data-theme-primary/><script src="../assets/themeswap.js"></script></head><body><div id="documenter"><nav class="docs-sidebar"><div class="docs-package-name"><span class="docs-autofit"><a href="../">CancellationTokens.jl</a></span></div><button class="docs-search-query input is-rounded is-small is-clickable my-2 mx-auto py-1 px-2" id="documenter-search-query">Search docs (Ctrl + /)</button><ul class="docs-menu"><li><a class="tocitem" href="../">Home</a></li><li class="is-active"><a class="tocitem" href>Guide</a><ul class="internal"><li><a class="tocitem" href="#Basic-Usage"><span>Basic Usage</span></a></li><li><a class="tocitem" href="#Timeout-Based-Cancellation"><span>Timeout-Based Cancellation</span></a></li><li><a class="tocitem" href="#Combined-/-Linked-Sources"><span>Combined / Linked Sources</span></a></li><li><a class="tocitem" href="#Handling-OperationCanceledException"><span>Handling OperationCanceledException</span></a></li><li><a class="tocitem" href="#Building-Custom-Cancellable-Operations"><span>Building Custom Cancellable Operations</span></a></li><li><a class="tocitem" href="#Callback-Registration"><span>Callback Registration</span></a></li><li><a class="tocitem" href="#Resource-Cleanup"><span>Resource Cleanup</span></a></li></ul></li><li><a class="tocitem" href="../base/">Base Function Extensions</a></li><li><a class="tocitem" href="../api/">API Reference</a></li></ul><div class="docs-version-selector field has-addons"><div class="control"><span class="docs-label button is-static is-size-7">Version</span></div><div class="docs-selector control is-expanded"><div class="select is-fullwidth is-size-7"><select id="documenter-version-selector"></select></div></div></div></nav><div class="docs-main"><header class="docs-navbar"><a class="docs-sidebar-button docs-navbar-link fa-solid fa-bars is-hidden-desktop" id="documenter-sidebar-button" href="#"></a><nav class="breadcrumb"><ul class="is-hidden-mobile"><li class="is-active"><a href>Guide</a></li></ul><ul class="is-hidden-tablet"><li class="is-active"><a href>Guide</a></li></ul></nav><div class="docs-right"><a class="docs-navbar-link" href="https://github.com/davidanthoff/CancellationTokens.jl" title="View the repository on GitHub"><span class="docs-icon fa-brands"></span><span class="docs-label is-hidden-touch">GitHub</span></a><a class="docs-navbar-link" href="https://github.com/davidanthoff/CancellationTokens.jl/blob/main/docs/src/guide.md" title="Edit source on GitHub"><span class="docs-icon fa-solid"></span></a><a class="docs-settings-button docs-navbar-link fa-solid fa-gear" id="documenter-settings-button" href="#" title="Settings"></a><a class="docs-article-toggle-button fa-solid fa-chevron-up" id="documenter-article-toggle-button" href="javascript:;" title="Collapse all docstrings"></a></div></header><article class="content" id="documenter-page"><h1 id="Guide"><a class="docs-heading-anchor" href="#Guide">Guide</a><a id="Guide-1"></a><a class="docs-heading-anchor-permalink" href="#Guide" title="Permalink"></a></h1><h2 id="Basic-Usage"><a class="docs-heading-anchor" href="#Basic-Usage">Basic Usage</a><a id="Basic-Usage-1"></a><a class="docs-heading-anchor-permalink" href="#Basic-Usage" title="Permalink"></a></h2><p>Create a source, get a token, pass it to operations:</p><pre><code class="language-julia hljs">using CancellationTokens
+
+src = CancellationTokenSource()
+token = get_token(src)
+
+# Later, from another task or thread:
+cancel(src)</code></pre><p>Check whether cancellation has been requested without blocking:</p><pre><code class="language-julia hljs">if is_cancellation_requested(token)
+    # clean up
+end</code></pre><p>Or block until cancellation occurs:</p><pre><code class="language-julia hljs">wait(token)  # returns when cancel(src) is called</code></pre><h2 id="Timeout-Based-Cancellation"><a class="docs-heading-anchor" href="#Timeout-Based-Cancellation">Timeout-Based Cancellation</a><a id="Timeout-Based-Cancellation-1"></a><a class="docs-heading-anchor-permalink" href="#Timeout-Based-Cancellation" title="Permalink"></a></h2><p>A source can auto-cancel after a given number of seconds:</p><pre><code class="language-julia hljs">src = CancellationTokenSource(5.0)   # cancels after 5 seconds
+wait(get_token(src))                 # blocks for ~5 s</code></pre><p>This is useful for implementing timeouts on operations that accept a token:</p><pre><code class="language-julia hljs"># Give the operation at most 10 seconds
+src = CancellationTokenSource(10.0)
+result = take!(channel, get_token(src))</code></pre><h2 id="Combined-/-Linked-Sources"><a class="docs-heading-anchor" href="#Combined-/-Linked-Sources">Combined / Linked Sources</a><a id="Combined-/-Linked-Sources-1"></a><a class="docs-heading-anchor-permalink" href="#Combined-/-Linked-Sources" title="Permalink"></a></h2><p>A combined source cancels when <strong>any</strong> of its parent tokens is cancelled:</p><pre><code class="language-julia hljs">timeout_src = CancellationTokenSource(30.0)
+manual_src  = CancellationTokenSource()
+
+combined = CancellationTokenSource(get_token(timeout_src), get_token(manual_src))
+token = get_token(combined)
+
+# `token` will be cancelled if the timeout expires OR if manual_src is cancelled
+sleep(60.0, token)</code></pre><p>The parent sources are not affected when the combined source is cancelled through one of them — cancellation only flows downward.</p><h2 id="Handling-OperationCanceledException"><a class="docs-heading-anchor" href="#Handling-OperationCanceledException">Handling OperationCanceledException</a><a id="Handling-OperationCanceledException-1"></a><a class="docs-heading-anchor-permalink" href="#Handling-OperationCanceledException" title="Permalink"></a></h2><p>Cancellable functions throw <a href="../api/#CancellationTokens.OperationCanceledException"><code>OperationCanceledException</code></a> when their token is cancelled. Catch it to perform cleanup:</p><pre><code class="language-julia hljs">try
+    data = take!(channel, token)
+    process(data)
+catch ex
+    if ex isa OperationCanceledException
+        println(&quot;Operation was cancelled&quot;)
+        # The channel is still usable after cancellation
+    else
+        rethrow()
+    end
+end</code></pre><p>Retrieve the token that caused the exception with <a href="../api/#CancellationTokens.get_token"><code>get_token</code></a>:</p><pre><code class="language-julia hljs">catch ex::OperationCanceledException
+    tok = get_token(ex)
+    @info &quot;Cancelled&quot; is_cancellation_requested(tok)
+end</code></pre><h2 id="Building-Custom-Cancellable-Operations"><a class="docs-heading-anchor" href="#Building-Custom-Cancellable-Operations">Building Custom Cancellable Operations</a><a id="Building-Custom-Cancellable-Operations-1"></a><a class="docs-heading-anchor-permalink" href="#Building-Custom-Cancellable-Operations" title="Permalink"></a></h2><p>Use <code>wait(token)</code> and <code>is_cancellation_requested(token)</code> to add cancellation support to your own functions:</p><pre><code class="language-julia hljs">function my_long_computation(token::CancellationToken)
+    result = 0
+    for i in 1:1_000_000
+        # Periodically check for cancellation
+        if i % 1000 == 0
+            is_cancellation_requested(token) &amp;&amp; throw(OperationCanceledException(token))
+        end
+        result += expensive_step(i)
+    end
+    return result
+end</code></pre><p>For operations that block on a condition variable or event, spawn a monitoring task that wakes up the waiter on cancellation:</p><pre><code class="language-julia hljs">function my_blocking_op(token::CancellationToken)
+    is_cancellation_requested(token) &amp;&amp; throw(OperationCanceledException(token))
+
+    done = Threads.Event()
+    result = Ref{Any}(nothing)
+
+    # Worker
+    worker = @async begin
+        result[] = do_work()
+        notify(done)
+    end
+
+    # Cancellation monitor
+    monitor = @async begin
+        wait(token)
+        notify(done)
+    end
+
+    wait(done)
+
+    if is_cancellation_requested(token)
+        throw(OperationCanceledException(token))
+    end
+    return result[]
+end</code></pre><h2 id="Callback-Registration"><a class="docs-heading-anchor" href="#Callback-Registration">Callback Registration</a><a id="Callback-Registration-1"></a><a class="docs-heading-anchor-permalink" href="#Callback-Registration" title="Permalink"></a></h2><p>Instead of spawning a task to watch for cancellation, you can register a callback that is invoked synchronously when <code>cancel</code> is called — matching .NET&#39;s <code>CancellationToken.Register(Action)</code>:</p><pre><code class="language-julia hljs">src = CancellationTokenSource()
+token = get_token(src)
+
+reg = register(token) do
+    println(&quot;Cancelled!&quot;)
+end
+
+cancel(src)   # prints &quot;Cancelled!&quot; immediately, inline with cancel()</code></pre><p>Callbacks are invoked synchronously during <code>cancel()</code>, so they should be non-blocking and fast.</p><p>If the token is already cancelled when <code>register</code> is called, the callback is invoked immediately before <code>register</code> returns.</p><h3 id="Deregistration"><a class="docs-heading-anchor" href="#Deregistration">Deregistration</a><a id="Deregistration-1"></a><a class="docs-heading-anchor-permalink" href="#Deregistration" title="Permalink"></a></h3><p><code>register</code> returns a <a href="../api/#CancellationTokens.CancellationTokenRegistration"><code>CancellationTokenRegistration</code></a> handle.  Call <code>close</code> on it to prevent the callback from being invoked:</p><pre><code class="language-julia hljs">src = CancellationTokenSource()
+reg = register(get_token(src)) do
+    error(&quot;should not run&quot;)
+end
+
+close(reg)     # deregister
+cancel(src)    # callback is NOT invoked</code></pre><p>Deregistration is idempotent — calling <code>close</code> multiple times is safe.</p><h3 id="Use-Cases"><a class="docs-heading-anchor" href="#Use-Cases">Use Cases</a><a id="Use-Cases-1"></a><a class="docs-heading-anchor-permalink" href="#Use-Cases" title="Permalink"></a></h3><p>Callback registration is useful when you need to perform a side effect on cancellation without spawning a monitoring task:</p><pre><code class="language-julia hljs"># Close a socket when cancelled
+reg = register(token) do
+    close(socket)
+end
+
+try
+    process(socket)
+finally
+    close(reg)   # clean up registration if we finish normally
+end</code></pre><p>It is also how combined sources (<code>CancellationTokenSource(token1, token2, ...)</code>) are implemented internally — each parent token registers a callback instead of spawning a monitoring task.</p><h2 id="Resource-Cleanup"><a class="docs-heading-anchor" href="#Resource-Cleanup">Resource Cleanup</a><a id="Resource-Cleanup-1"></a><a class="docs-heading-anchor-permalink" href="#Resource-Cleanup" title="Permalink"></a></h2><p><a href="../api/#CancellationTokens.CancellationTokenSource"><code>CancellationTokenSource</code></a> implements <code>close</code>, which is equivalent to <a href="../api/#CancellationTokens.cancel"><code>cancel</code></a>. This enables <code>do</code>-block patterns for scoped cancellation:</p><pre><code class="language-julia hljs">src = CancellationTokenSource()
+try
+    run_operation(get_token(src))
+finally
+    close(src)  # ensures timer and callbacks are cleaned up
+end</code></pre></article><nav class="docs-footer"><a class="docs-footer-prevpage" href="../">« Home</a><a class="docs-footer-nextpage" href="../base/">Base Function Extensions »</a><div class="flexbox-break"></div><p class="footer-message">Powered by <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> and the <a href="https://julialang.org/">Julia Programming Language</a>.</p></nav></div><div class="modal" id="documenter-settings"><div class="modal-background"></div><div class="modal-card"><header class="modal-card-head"><p class="modal-card-title">Settings</p><button class="delete"></button></header><section class="modal-card-body"><p><label class="label">Theme</label><div class="select"><select id="documenter-themepicker"><option value="auto">Automatic (OS)</option><option value="documenter-light">documenter-light</option><option value="documenter-dark">documenter-dark</option><option value="catppuccin-latte">catppuccin-latte</option><option value="catppuccin-frappe">catppuccin-frappe</option><option value="catppuccin-macchiato">catppuccin-macchiato</option><option value="catppuccin-mocha">catppuccin-mocha</option></select></div></p><hr/><p>This document was generated with <a href="https://github.com/JuliaDocs/Documenter.jl">Documenter.jl</a> version 1.17.0 on <span class="colophon-date" title="Friday 13 March 2026 02:35">Friday 13 March 2026</span>. Using Julia version 1.12.5.</p></section><footer class="modal-card-foot"></footer></div></div></div></body></html>
