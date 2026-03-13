@@ -1,5 +1,10 @@
 # CancellationTokens.jl
 
+[![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](http://www.repostatus.org/badges/latest/active.svg)](http://www.repostatus.org/#active)
+[![](https://img.shields.io/badge/docs-stable-blue.svg)](https://davidanthoff.github.io/CancellationTokens.jl/stable)
+[![Julia CI](https://github.com/davidanthoff/CancellationTokens.jl/actions/workflows/juliaci.yml/badge.svg)](https://github.com/davidanthoff/CancellationTokens.jl/actions/workflows/juliaci.yml)
+[![codecov](https://codecov.io/gh/davidanthoff/CancellationTokens.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/davidanthoff/CancellationTokens.jl)
+
 A Julia implementation of .NET's [Cancellation Framework](https://devblogs.microsoft.com/pfxteam/net-4-cancellation-framework/) for cooperative cancellation of asynchronous and long-running operations. See also the [.NET documentation](https://docs.microsoft.com/en-us/dotnet/standard/threading/cancellation-in-managed-threads).
 
 Thread-safe on all Julia versions: Julia 1.7+ uses lock-free atomic operations; older versions fall back to `ReentrantLock`.
