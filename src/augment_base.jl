@@ -85,6 +85,68 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
 end
 
 # ---------------------------------------------------------------------------
+# Sockets.accept with cancellation
+# ---------------------------------------------------------------------------
+
+"""
+    Sockets.accept(server::Union{Sockets.TCPServer, Sockets.PipeServer},
+                   token::CancellationToken)
+    Sockets.accept(server::Union{Sockets.TCPServer, Sockets.PipeServer},
+                   client::Union{Sockets.TCPSocket, Sockets.PipeEndpoint},
+                   token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
+function _accept_cancellable(f, server, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+
+    callback_started = Threads.Atomic{Bool}(false)
+    completed = Threads.Atomic{Bool}(false)
+
+    reg = register(token) do
+        if completed[]
+            return
+        end
+
+        if !Threads.atomic_xchg!(callback_started, true)
+            @async begin
+                lock(server.cond) do
+                    if !completed[]
+                        notify(server.cond, OperationCanceledException(token); error=true)
+                    end
+                end
+            end
+        end
+    end
+
+    try
+        return f()
+    finally
+        close(reg)
+        Threads.atomic_xchg!(completed, true)
+    end
+end
+
+function Sockets.accept(server::Sockets.TCPServer, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server), server, token)
+end
+
+function Sockets.accept(server::Sockets.PipeServer, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server), server, token)
+end
+
+function Sockets.accept(server::Sockets.TCPServer, client::Sockets.TCPSocket, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
+end
+
+function Sockets.accept(server::Sockets.PipeServer, client::Sockets.PipeEndpoint, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
+end
+
+# ---------------------------------------------------------------------------
 # Base.wait(::Channel, ::CancellationToken)
 # ---------------------------------------------------------------------------
 

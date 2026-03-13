@@ -40,6 +40,8 @@ The package extends several Base functions to accept a `CancellationToken` as th
 - `wait(channel, token)` — wait for data on a `Channel`
 - `take!(channel, token)` — take from a buffered `Channel`
 - `readline(socket, token)` — read from a `TCPSocket` or `PipeEndpoint`
+- `Sockets.accept(server, token)` — accept from a `TCPServer` or `PipeServer`
+- `Sockets.accept(server, client, token)` — accept into a provided `TCPSocket` or `PipeEndpoint`
 
 All of these throw an `OperationCanceledException` if the token is cancelled before the operation completes.
 
