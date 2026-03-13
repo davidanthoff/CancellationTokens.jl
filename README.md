@@ -1,7 +1,7 @@
 # CancellationTokens.jl
 
 [![Project Status: Active - The project has reached a stable, usable state and is being actively developed.](http://www.repostatus.org/badges/latest/active.svg)](http://www.repostatus.org/#active)
-[![](https://img.shields.io/badge/docs-stable-blue.svg)](https://davidanthoff.github.io/CancellationTokens.jl/stable/)
+[![](https://img.shields.io/badge/docs-stable-blue.svg)](https://davidanthoff.github.io/CancellationTokens.jl/)
 [![Julia CI](https://github.com/davidanthoff/CancellationTokens.jl/actions/workflows/juliaci.yml/badge.svg)](https://github.com/davidanthoff/CancellationTokens.jl/actions/workflows/juliaci.yml)
 [![codecov](https://codecov.io/gh/davidanthoff/CancellationTokens.jl/branch/main/graph/badge.svg)](https://codecov.io/gh/davidanthoff/CancellationTokens.jl)
 
