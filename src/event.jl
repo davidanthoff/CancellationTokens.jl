@@ -1,10 +1,10 @@
 @static if VERSION < v"1.2"
     # Julia < 1.2 lacks Threads.Condition; provide a minimal condition
-    # variable that supports lock/unlock/wait/notify.
+    # variable that supports lock/unlock/wait/notify with an external lock.
     mutable struct WaitCondition
-        _lock::Base.Threads.Mutex
+        _lock::ReentrantLock
         _q::Vector{Task}
-        WaitCondition() = new(Base.Threads.Mutex(), Task[])
+        WaitCondition(lock::ReentrantLock) = new(lock, Task[])
     end
 
     Base.lock(c::WaitCondition) = lock(c._lock)
@@ -17,6 +17,7 @@
         try
             wait()
         catch
+            lock(c._lock)
             filter!(x -> x !== ct, c._q)
             rethrow()
         end
