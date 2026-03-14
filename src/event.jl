@@ -1,45 +1,40 @@
-@static if VERSION < v"1.1"
-    mutable struct Event
-        lock::Base.Threads.Mutex
-        q::Vector{Task}
-        set::Bool
-        # TODO: use a Condition with its paired lock
-        Event() = new(Base.Threads.Mutex(), Task[], false)
+@static if VERSION < v"1.2"
+    # Julia < 1.2 lacks Threads.Condition; provide a minimal condition
+    # variable that supports lock/unlock/wait/notify.
+    mutable struct WaitCondition
+        _lock::Base.Threads.Mutex
+        _q::Vector{Task}
+        WaitCondition() = new(Base.Threads.Mutex(), Task[])
     end
-    
-    function Base.wait(e::Event)
-        e.set && return
-        lock(e.lock)
-        while !e.set
-            ct = current_task()
-            push!(e.q, ct)
-            unlock(e.lock)
-            try
-                wait()
-            catch
-                filter!(x->x!==ct, e.q)
-                rethrow()
-            end
-            lock(e.lock)
+
+    Base.lock(c::WaitCondition) = lock(c._lock)
+    Base.unlock(c::WaitCondition) = unlock(c._lock)
+
+    function Base.wait(c::WaitCondition)
+        ct = current_task()
+        push!(c._q, ct)
+        unlock(c._lock)
+        try
+            wait()
+        catch
+            filter!(x -> x !== ct, c._q)
+            rethrow()
         end
-        unlock(e.lock)
+        lock(c._lock)
         return nothing
     end
-    
-    function Base.notify(e::Event)
-        lock(e.lock)
-        if !e.set
-            e.set = true
-            for t in e.q
+
+    function Base.notify(c::WaitCondition; all::Bool=true)
+        if all
+            for t in c._q
                 schedule(t)
             end
-            empty!(e.q)
+            empty!(c._q)
+        elseif !isempty(c._q)
+            schedule(popfirst!(c._q))
         end
-        unlock(e.lock)
         return nothing
     end
-elseif VERSION < v"1.2"
-    using Base.Threads: Event
 else
-    using Base: Event
+    const WaitCondition = Threads.Condition
 end
