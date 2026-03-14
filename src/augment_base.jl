@@ -58,6 +58,11 @@ before data arrives.
 """
 function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
     done = Threads.Atomic{Bool}(false)
+    # Ref{Bool} rather than a plain Bool: a reassigned local captured by a
+    # closure is boxed as Core.Box (typed Any), causing type instability.
+    # Ref{Bool} is concretely typed and is never itself reassigned.
+    completed = Ref(false)  # guarded by guard lock
+    guard = ReentrantLock()
 
     # Register a callback that enqueues socket notification work.
     # Running lock/notify directly inside cancel() can deadlock because
@@ -65,10 +70,18 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     reg = register(token) do
         if !Threads.atomic_xchg!(done, true)
             @async begin
-                # s.cond is a GenericCondition with its own lock; notify requires
-                # holding the condition's lock, not the stream's ReentrantLock.
-                lock(s.cond) do
-                    notify(s.cond, OperationCanceledException(token); error=true)
+                # Acquire the guard lock first, then s.cond's lock.
+                # The guard serialises the notify against the completion
+                # flag, preventing stale error injection after readline
+                # has returned.
+                lock(guard) do
+                    if !completed[]
+                        # s.cond is a GenericCondition with its own lock;
+                        # notify requires holding the condition's lock.
+                        lock(s.cond) do
+                            notify(s.cond, OperationCanceledException(token); error=true)
+                        end
+                    end
                 end
             end
         end
@@ -77,6 +90,13 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     try
         return readline(s; keep=keep)
     finally
+        # Mark the operation as completed under the same guard lock
+        # that the async notification task checks.  Any concurrently
+        # running task that has not yet read the flag will block here
+        # until we set it, and any future task will see it as true.
+        lock(guard) do
+            completed[] = true
+        end
         # Deregister the callback to prevent notification after completion.
         close(reg)
         # Signal to the callback that it should not notify if it fires anyway.
@@ -111,6 +131,10 @@ function Base.wait(c::Channel, token::CancellationToken)
     cond = _channel_wait_cond(c)
 
     done = Threads.Atomic{Bool}(false)
+    # Ref{Bool} rather than a plain Bool: a reassigned local captured by a
+    # closure is boxed as Core.Box (typed Any), causing type instability.
+    # Ref{Bool} is concretely typed and is never itself reassigned.
+    completed = Ref(false)  # guarded by the channel's lock
 
     # Register a callback that enqueues channel notification work.
     # Running lock/notify directly inside cancel() can deadlock because
@@ -119,7 +143,10 @@ function Base.wait(c::Channel, token::CancellationToken)
         if !Threads.atomic_xchg!(done, true)
             @async begin
                 lock(c) do
-                    notify(cond)
+                    # Only notify if the main operation hasn't finished yet.
+                    if !completed[]
+                        notify(cond)
+                    end
                 end
             end
         end
@@ -133,6 +160,11 @@ function Base.wait(c::Channel, token::CancellationToken)
             wait(cond)
         end
     finally
+        # Set the completion flag while still holding the channel lock.
+        # The async notification task acquires the same lock, so it will
+        # either see completed==true and skip the notify, or it will
+        # notify while we are still in wait(cond) (correct behaviour).
+        completed[] = true
         unlock(c)
         # Deregister the callback to prevent notification after completion.
         close(reg)
@@ -177,6 +209,10 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
     lock(c)
     try
         done = Threads.Atomic{Bool}(false)
+        # Ref{Bool} rather than a plain Bool: a reassigned local captured
+        # by a closure is boxed as Core.Box (typed Any), causing type
+        # instability. Ref{Bool} is concretely typed and never reassigned.
+        completed = Ref(false)  # guarded by the channel's lock
 
         # Register a callback that enqueues channel notification work.
         # Running lock/notify directly inside cancel() can deadlock because
@@ -185,7 +221,10 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
             if !Threads.atomic_xchg!(done, true)
                 @async begin
                     lock(c) do
-                        notify(c.cond_take)
+                        # Only notify if the main operation hasn't finished yet.
+                        if !completed[]
+                            notify(c.cond_take)
+                        end
                     end
                 end
             end
@@ -205,6 +244,10 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
             notify(c.cond_put, nothing, false, false) # notify only one, since only one slot has become available for a put!.
             return v
         finally
+            # Set the completion flag while still holding the channel lock.
+            # The async notification task acquires the same lock, so
+            # mutual exclusion is guaranteed.
+            completed[] = true
             # Deregister the callback to prevent notification after completion.
             close(reg)
             # Signal to the callback that it should not notify if it fires anyway.
