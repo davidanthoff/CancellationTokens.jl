@@ -13,7 +13,7 @@
         for w in waiters
             wait(w)
         end
-        @test is_cancellation_requested(src)
+        @test is_cancellation_requested(get_token(src))
     end
 end
 
@@ -25,7 +25,7 @@ end
         t2 = Threads.@spawn cancel(src)
         wait(t1)
         wait(t2)
-        @test is_cancellation_requested(src)
+        @test is_cancellation_requested(get_token(src))
     end
 end
 
@@ -79,7 +79,7 @@ end
             cancel(src1)
         end
         wait(get_token(combined))
-        @test is_cancellation_requested(combined)
+        @test is_cancellation_requested(get_token(combined))
     end
 end
 
@@ -90,7 +90,7 @@ end
         for t in tasks
             wait(t)
         end
-        @test is_cancellation_requested(src)
+        @test is_cancellation_requested(get_token(src))
     end
 end
 
@@ -119,7 +119,7 @@ end
         wait(t1)
         wait(t2)
         wait(get_token(combined))
-        @test is_cancellation_requested(combined)
+        @test is_cancellation_requested(get_token(combined))
     end
 end
 

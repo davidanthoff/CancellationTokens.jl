@@ -49,7 +49,7 @@ end
     client = Sockets.connect(Sockets.localhost, port)
     line = readline(client, get_token(src))
     @test line == "hello"
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 
     close(client)
     close(server)
