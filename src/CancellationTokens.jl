@@ -34,15 +34,16 @@ include("event.jl")
 @enum CancellationTokenSourceStates NotCanceledState=1 NotifyingState=2 NotifyingCompleteState=3
 
 # ---------------------------------------------------------------------------
-# Struct definition — Julia 1.7+ uses @atomic fields for lock-free operations
-# matching the .NET CAS + volatile pattern.  Older versions use ReentrantLock.
+# Struct definition — Julia 1.7+ uses @atomic on _state for lock-free CAS
+# matching .NET's Interlocked.CompareExchange.  Older versions use ReentrantLock
+# for _state transitions.  _kernel_cond shares _lock in both cases.
 # ---------------------------------------------------------------------------
 
 @static if VERSION >= v"1.7"
     mutable struct CancellationTokenSource
         @atomic _state::CancellationTokenSourceStates
         _timer::Union{Nothing,Timer}
-        @atomic _kernel_event::Union{Nothing,Event}
+        _kernel_cond::Union{Nothing,WaitCondition}  # lazily created under _lock
         _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
         _next_callback_id::Int
         _lock::ReentrantLock
@@ -55,7 +56,7 @@ else
     mutable struct CancellationTokenSource
         _state::CancellationTokenSourceStates
         _timer::Union{Nothing,Timer}
-        _kernel_event::Union{Nothing,Event}
+        _kernel_cond::Union{Nothing,WaitCondition}  # lazily created under _lock
         _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
         _next_callback_id::Int
         _lock::ReentrantLock
@@ -134,7 +135,7 @@ end
         (_, success) = @atomicreplace x._state NotCanceledState => NotifyingState
         success || return
 
-        # Timer cleanup and callback snapshot under the lock.
+        # Timer cleanup, callback snapshot, and waiter notification under _lock.
         callbacks = lock(x._lock) do
             if x._timer !== nothing
                 close(x._timer)
@@ -142,13 +143,10 @@ end
             end
             cbs = copy(x._callbacks)
             empty!(x._callbacks)
+            if x._kernel_cond !== nothing
+                notify(x._kernel_cond; all=true)
+            end
             cbs
-        end
-
-        # Signal the event if a waiter has installed one.
-        event = @atomic :acquire x._kernel_event
-        if event !== nothing
-            notify(event)
         end
 
         # Invoke registered callbacks synchronously (like .NET).
@@ -162,8 +160,10 @@ end
         @atomic :release x._state = NotifyingCompleteState
     end
 
-    # Single atomic read — equivalent to .NET's volatile read of _state.
-    is_cancellation_requested(x::CancellationTokenSource) = (@atomic :acquire x._state) > NotCanceledState
+    # seq_cst: the CAS on _state in _internal_notify() and this load must
+    # both be seq_cst so that wait() sees the state change even when it
+    # checks _state after installing itself on _kernel_cond.
+    is_cancellation_requested(x::CancellationTokenSource) = (@atomic x._state) > NotCanceledState
 
 else # VERSION < v"1.7"
 
@@ -180,10 +180,8 @@ else # VERSION < v"1.7"
                 cbs = copy(x._callbacks)
                 empty!(x._callbacks)
 
-                # Notify the event but keep it alive — its `set` flag ensures
-                # any future wait() calls return immediately.
-                if x._kernel_event !== nothing
-                    notify(x._kernel_event)
+                if x._kernel_cond !== nothing
+                    notify(x._kernel_cond; all=true)
                 end
 
                 x._state = NotifyingCompleteState
@@ -272,55 +270,46 @@ is_cancellation_requested(x::CancellationToken) = is_cancellation_requested(x._s
 
 @static if VERSION >= v"1.7"
 
-    # Lock-free wait matching .NET's WaitHandle pattern:
-    #  1. Atomic read of _kernel_event
-    #  2. If nothing, CAS a new Event into place (loser uses winner's event)
-    #  3. Double-check _state after installing — if cancel() already ran and
-    #     missed our event, we signal it ourselves (idempotent).
     function Base.wait(x::CancellationToken)
         # Fast path (lock-free atomic read)
         is_cancellation_requested(x) && return
 
-        # Get or create event via CAS
-        event = @atomic :acquire x._source._kernel_event
-        if event === nothing
-            new_event = Event()
-            (old, success) = @atomicreplace x._source._kernel_event nothing => new_event
-            event = success ? new_event : old
+        # Lazily create _kernel_cond under _lock; the while-loop rechecks
+        # _state under the same lock, so a concurrent cancel() that calls
+        # notify() is always observed.
+        lock(x._source._lock)
+        try
+            if x._source._kernel_cond === nothing
+                x._source._kernel_cond = WaitCondition(x._source._lock)
+            end
+            while !is_cancellation_requested(x)
+                wait(x._source._kernel_cond)
+            end
+        finally
+            unlock(x._source._lock)
         end
-
-        # Double-check: if cancel() already ran, it may have read
-        # _kernel_event as nothing and skipped notify().
-        # The seq_cst CAS on _kernel_event and the seq_cst CAS on _state
-        # guarantee that at least one side observes the other's write.
-        # notify() is idempotent, so double-signaling is harmless.
-        if is_cancellation_requested(x)
-            notify(event)
-            return
-        end
-
-        wait(event)
     end
 
 else # VERSION < v"1.7"
 
     function Base.wait(x::CancellationToken)
-        # Fast path (no lock needed)
+        # Fast path
         is_cancellation_requested(x) && return
 
-        # Atomically check state + get/create event under the lock.
-        # This prevents the TOCTOU race where cancel() fires between our
-        # check above and the wait() below.
-        event = lock(x._source._lock) do
-            is_cancellation_requested(x) && return nothing
-            if x._source._kernel_event === nothing
-                x._source._kernel_event = Event()
+        # Lazily create _kernel_cond under _lock; the while-loop rechecks
+        # _state under the same lock, so a concurrent cancel() that calls
+        # notify() is always observed.
+        lock(x._source._lock)
+        try
+            if x._source._kernel_cond === nothing
+                x._source._kernel_cond = WaitCondition(x._source._lock)
             end
-            return x._source._kernel_event
+            while !is_cancellation_requested(x)
+                wait(x._source._kernel_cond)
+            end
+        finally
+            unlock(x._source._lock)
         end
-
-        event === nothing && return
-        wait(event)
     end
 
 end
