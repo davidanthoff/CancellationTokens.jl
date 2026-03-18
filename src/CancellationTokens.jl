@@ -509,6 +509,21 @@ function Base.close(x::CancellationTokenSource)
     cancel(x)
 end
 
+# ---------------------------------------------------------------------------
+# Internal helper: prefer Threads.@spawn (Julia ≥ 1.3) over @async.
+# Threads.@spawn schedules work on the thread pool, avoiding task-pinning
+# pitfalls of @async.  On Julia < 1.3, fall back to @async.
+# ---------------------------------------------------------------------------
+@static if VERSION >= v"1.3"
+    macro _spawn(expr)
+        :(Threads.@spawn $(esc(expr)))
+    end
+else
+    macro _spawn(expr)
+        :(@async $(esc(expr)))
+    end
+end
+
 include("augment_base.jl")
 
 end # module
