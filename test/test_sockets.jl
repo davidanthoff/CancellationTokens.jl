@@ -155,7 +155,7 @@ end
     client = Sockets.connect(Sockets.localhost, port)
     data = read(client, 5, get_token(src))
     @test data == UInt8[1, 2, 3, 4, 5]
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 
     close(client)
     close(server)
