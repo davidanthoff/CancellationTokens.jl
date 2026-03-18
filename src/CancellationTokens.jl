@@ -555,6 +555,8 @@ precompile(wait, (Channel{Any}, CancellationToken))
 precompile(take!, (Channel{Any}, CancellationToken))
 precompile(readline, (Sockets.TCPSocket, CancellationToken))
 precompile(readline, (Sockets.PipeEndpoint, CancellationToken))
+precompile(read, (Sockets.TCPSocket, Int, CancellationToken))
+precompile(read, (Sockets.PipeEndpoint, Int, CancellationToken))
 
 # Internal hot paths
 precompile(_internal_notify, (CancellationTokenSource,))

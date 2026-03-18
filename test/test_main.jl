@@ -370,6 +370,8 @@ end
 # ---------------------------------------------------------------------------
 
 @testitem "Type stability (@inferred) of all public methods" begin
+    import Sockets
+
     # --- Core constructors ---
     src = @inferred CancellationTokenSource()
     timeout_src = @inferred CancellationTokenSource(0.5)
@@ -413,6 +415,11 @@ end
     # --- sleep (normal completion, zero duration) ---
     src4 = CancellationTokenSource()
     @inferred sleep(0.0, get_token(src4))
+
+    # --- read (socket — just test that the method signature is inferrable
+    #     via precompile; can't call without a real socket) ---
+    @test precompile(read, (Sockets.TCPSocket, Int, CancellationToken))
+    @test precompile(read, (Sockets.PipeEndpoint, Int, CancellationToken))
 
     cancel(src3)
     cancel(src4)
