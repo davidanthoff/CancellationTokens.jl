@@ -5,11 +5,27 @@ All notable changes to CancellationTokens.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [2.0.0] - 2026-03-17
+
+### Breaking
+
+- Removed `is_cancellation_requested(::CancellationTokenSource)`. Use `is_cancellation_requested(get_token(src))` instead. The public API now consistently operates on tokens, not sources.
+- Removed `register(callback, ::CancellationTokenSource)`. Use `register(callback, get_token(src))` instead.
 
 ### Added
 
 - `Base.read(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::Integer, ::CancellationToken)` for cancellable fixed-byte socket reads (closes socket on cancellation, like `readline`).
+
+### Changed
+
+- Use `Threads.@spawn` instead of `@async` on Julia 1.3+ for internal async work in cancellation callbacks, avoiding task-pinning pitfalls.
+- Improved type stability and added precompile directives for faster time-to-first-use.
+
+### Fixed
+
+- `MethodError` on Julia 1.0 and 1.1 when using cancellable `take!(::Channel, ...)` or `wait(::Channel, ...)`, caused by `lock(::Channel)` not existing before Julia 1.2. These methods now use a simpler cooperative-scheduling path on Julia < 1.2.
+- Data race where cancellation callbacks could inject spurious notifications into shared channel condition variables after the main operation completes.
+- Potential crash in cancellable `readline` on closed sockets.
 
 ## [1.2.1] - 2026-03-12
 
@@ -85,7 +101,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `Event` polyfill for Julia < 1.1.
 - Support for Julia 1.0+.
 
-[Unreleased]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.2.0...HEAD
+[2.0.0]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.2.1...v2.0.0
+[1.2.1]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.2.0...v1.2.1
 [1.2.0]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.1.1...v1.2.0
 [1.1.1]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.1.0...v1.1.1
 [1.1.0]: https://github.com/davidanthoff/CancellationTokens.jl/compare/v1.0.0...v1.1.0
