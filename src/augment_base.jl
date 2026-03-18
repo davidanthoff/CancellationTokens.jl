@@ -89,10 +89,10 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     # Register a callback that closes the socket on cancellation.
     # close() unblocks any pending reads, which we then detect and
     # translate into OperationCanceledException.
-    # The callback is run via @async to avoid deadlocking inside cancel(),
+    # The callback is run via @_spawn to avoid deadlocking inside cancel(),
     # since register callbacks execute synchronously.
     reg = register(token) do
-        @async close(s)
+        @_spawn close(s)
     end
 
     try
@@ -229,7 +229,7 @@ function Base.wait(c::Channel, token::CancellationToken)
     # register callbacks are executed synchronously by cancel().
     reg = register(token) do
         if !Threads.atomic_xchg!(done, true)
-            @async begin
+            @_spawn begin
                 lock(c) do
                     # Only notify if the main operation hasn't finished yet.
                     if !completed[]
@@ -307,7 +307,7 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
         # register callbacks are executed synchronously by cancel().
         reg = register(token) do
             if !Threads.atomic_xchg!(done, true)
-                @async begin
+                @_spawn begin
                     lock(c) do
                         # Only notify if the main operation hasn't finished yet.
                         if !completed[]

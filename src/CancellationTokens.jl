@@ -163,7 +163,7 @@ end
     end
 
     # Single atomic read — equivalent to .NET's volatile read of _state.
-    is_cancellation_requested(x::CancellationTokenSource) = (@atomic :acquire x._state) > NotCanceledState
+    _is_cancellation_requested(x::CancellationTokenSource) = (@atomic :acquire x._state) > NotCanceledState
 
 else # VERSION < v"1.7"
 
@@ -201,7 +201,7 @@ else # VERSION < v"1.7"
         end
     end
 
-    is_cancellation_requested(x::CancellationTokenSource) = x._state > NotCanceledState
+    _is_cancellation_requested(x::CancellationTokenSource) = x._state > NotCanceledState
 
 end
 
@@ -248,7 +248,6 @@ independent token objects that all reflect the same cancellation state.
 get_token(x::CancellationTokenSource) = CancellationToken(x)
 
 """
-    is_cancellation_requested(src::CancellationTokenSource) -> Bool
     is_cancellation_requested(token::CancellationToken) -> Bool
 
 Return `true` if [`cancel`](@ref) has been called (or a timeout has expired).
@@ -258,13 +257,13 @@ This is a non-blocking, lock-free check on Julia 1.7+.
 
 ```julia
 src = CancellationTokenSource()
-is_cancellation_requested(src)        # false
+token = get_token(src)
+is_cancellation_requested(token)  # false
 cancel(src)
-is_cancellation_requested(src)        # true
-is_cancellation_requested(get_token(src))  # true
+is_cancellation_requested(token)  # true
 ```
 """
-is_cancellation_requested(x::CancellationToken) = is_cancellation_requested(x._source)
+is_cancellation_requested(x::CancellationToken) = _is_cancellation_requested(x._source)
 
 # ---------------------------------------------------------------------------
 # wait(::CancellationToken) — version-split
@@ -409,7 +408,6 @@ end
 
 """
     register(callback, token::CancellationToken) -> CancellationTokenRegistration
-    register(callback, src::CancellationTokenSource) -> CancellationTokenRegistration
 
 Register `callback` (a zero-argument callable) to be invoked synchronously
 when `cancel` is called on the token's source.  If the token is already
@@ -446,20 +444,17 @@ function register(callback, token::CancellationToken)
     _register(callback, token._source)
 end
 
-function register(callback, src::CancellationTokenSource)
-    _register(callback, src)
-end
 
 function _register(callback, src::CancellationTokenSource)
     # Fast path: already cancelled — invoke immediately.
-    if is_cancellation_requested(src)
+    if _is_cancellation_requested(src)
         callback()
         return CancellationTokenRegistration(src, 0)
     end
 
     id = lock(src._lock) do
         # Double-check under lock: cancel() may have won the race.
-        if is_cancellation_requested(src)
+        if _is_cancellation_requested(src)
             return nothing
         end
         cb_id = src._next_callback_id
@@ -512,6 +507,21 @@ Equivalent to [`cancel(src)`](@ref cancel). Provided so that
 """
 function Base.close(x::CancellationTokenSource)
     cancel(x)
+end
+
+# ---------------------------------------------------------------------------
+# Internal helper: prefer Threads.@spawn (Julia ≥ 1.3) over @async.
+# Threads.@spawn schedules work on the thread pool, avoiding task-pinning
+# pitfalls of @async.  On Julia < 1.3, fall back to @async.
+# ---------------------------------------------------------------------------
+@static if VERSION >= v"1.3"
+    macro _spawn(expr)
+        :(Threads.@spawn $(esc(expr)))
+    end
+else
+    macro _spawn(expr)
+        :(@async $(esc(expr)))
+    end
 end
 
 include("augment_base.jl")
