@@ -8,7 +8,7 @@
     sleep(0.1, get_token(src))
     elapsed = time() - t0
     @test elapsed >= 0.05
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
 @testitem "sleep throws OperationCanceledException on cancel" begin
@@ -61,7 +61,7 @@ end
 @testitem "sleep - zero duration completes immediately" begin
     src = CancellationTokenSource()
     sleep(0.0, get_token(src))
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
 # ---------------------------------------------------------------------------
@@ -77,7 +77,7 @@ end
     end
     wait(ch, get_token(src))
     @test isready(ch)
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
 @testitem "wait(Channel) throws on cancellation" begin
