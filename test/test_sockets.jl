@@ -1,4 +1,4 @@
-@testitem "readline(TCPSocket) - cancel" begin
+@testitem "readline(TCPSocket) - cancel" setup=[SpawnHelper] begin
     import Sockets
 
     port, server = Sockets.listenany(Sockets.localhost, 8000)
@@ -6,7 +6,7 @@
     src = CancellationTokenSource()
     token = get_token(src)
 
-    @async begin
+    @spawn begin
         conn = Sockets.accept(server)
         # Don't send anything — let readline block
         sleep(5.0)
@@ -15,7 +15,7 @@
 
     client = Sockets.connect(Sockets.localhost, port)
 
-    @async begin
+    @spawn begin
         sleep(0.2)
         cancel(src)
     end
@@ -27,14 +27,14 @@
     close(server)
 end
 
-@testitem "readline(TCPSocket) - data arrives before cancel" begin
+@testitem "readline(TCPSocket) - data arrives before cancel" setup=[SpawnHelper] begin
     import Sockets
 
     port, server = Sockets.listenany(Sockets.localhost, 8000)
 
     src = CancellationTokenSource()
 
-    @async begin
+    @spawn begin
         conn = Sockets.accept(server)
         sleep(0.1)
         println(conn, "hello")
@@ -50,7 +50,7 @@ end
     close(server)
 end
 
-@testitem "readline(TCPSocket) - cancel does not crash other readers" begin
+@testitem "readline(TCPSocket) - cancel does not crash other readers" setup=[SpawnHelper] begin
     import Sockets
 
     # Regression test for issue #24:
@@ -59,7 +59,7 @@ end
     # so other readers get a clean I/O error — not OperationCanceledException.
     port, server = Sockets.listenany(Sockets.localhost, 8000)
 
-    @async begin
+    @spawn begin
         conn = Sockets.accept(server)
         # Don't send anything — let both readers block
         sleep(5.0)
@@ -71,7 +71,7 @@ end
     src = CancellationTokenSource()
 
     # Task 1: readline with cancellation token (will be cancelled)
-    task1 = @async begin
+    task1 = @spawn begin
         try
             readline(client, get_token(src))
         catch ex
@@ -80,7 +80,7 @@ end
     end
 
     # Task 2: plain readline on the same socket (no cancellation token)
-    task2 = @async begin
+    task2 = @spawn begin
         try
             readline(client)
             :ok
