@@ -43,3 +43,13 @@ readline(socket, token; keep=false)
 ```@docs
 Base.readline(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::CancellationTokens.CancellationToken)
 ```
+
+## read (sockets)
+
+```julia
+read(socket, nb, token)
+```
+
+```@docs
+Base.read(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::Integer, ::CancellationTokens.CancellationToken)
+```
