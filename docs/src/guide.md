@@ -232,6 +232,31 @@ end
     timed out, the protocol state is usually indeterminate and the
     connection should be re-established.
 
+## Socket read Cancellation
+
+[`read(socket, nb, token)`](@ref) supports cancellation on `TCPSocket` and
+`PipeEndpoint`, reading a fixed number of bytes.  Like `readline`, the
+socket is **closed** when the token is cancelled:
+
+```julia
+src = CancellationTokenSource(5.0)
+try
+    data = read(socket, 1024, get_token(src))
+    process(data)
+catch ex
+    if ex isa OperationCanceledException
+        @info "Read timed out — socket has been closed"
+        # Reconnect if needed
+    else
+        rethrow()
+    end
+end
+```
+
+The same rationale applies: closing the socket is the only safe way to
+interrupt a blocking read without corrupting other tasks on the same
+socket.
+
 ## Resource Cleanup
 
 [`CancellationTokenSource`](@ref) implements `close`, which is equivalent to [`cancel`](@ref). This enables `do`-block patterns for scoped cancellation:
