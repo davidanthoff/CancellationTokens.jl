@@ -83,7 +83,7 @@ catch ex
 end
 ```
 """
-function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep=false)
+function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken; keep::Bool=false)
     is_cancellation_requested(token) && throw(OperationCanceledException(token))
 
     # Register a callback that closes the socket on cancellation.
