@@ -212,6 +212,8 @@ src = CancellationTokenSource(5.0)    # 5 s timeout
 wait(ch, get_token(src))              # throws after 5 s if no data
 ```
 """
+@static if VERSION >= v"1.2"
+
 function Base.wait(c::Channel, token::CancellationToken)
     is_cancellation_requested(token) && throw(OperationCanceledException(token))
     isready(c) && return
@@ -262,6 +264,35 @@ function Base.wait(c::Channel, token::CancellationToken)
     nothing
 end
 
+else # VERSION < v"1.2" — Channels use plain Condition with no lock.
+
+function Base.wait(c::Channel, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+    isready(c) && return
+
+    cond = _channel_wait_cond(c)
+
+    # Register a callback that notifies the condition to wake us up.
+    # On Julia < 1.2 there is only cooperative scheduling (no threads),
+    # so no lock/completed guard is needed.
+    reg = register(token) do
+        @_spawn notify(cond)
+    end
+
+    try
+        while !isready(c)
+            Base.check_channel_state(c)
+            is_cancellation_requested(token) && throw(OperationCanceledException(token))
+            wait(cond)
+        end
+    finally
+        close(reg)
+    end
+    nothing
+end
+
+end # @static if VERSION >= v"1.2"
+
 # ---------------------------------------------------------------------------
 # Base.take!(::Channel, ::CancellationToken)
 # ---------------------------------------------------------------------------
@@ -292,6 +323,8 @@ function Base.take!(c::Channel, token::CancellationToken)
         _take_unbuffered_cancellable(c, token)
     end
 end
+
+@static if VERSION >= v"1.2"
 
 function _take_buffered_cancellable(c::Channel, token::CancellationToken)
     lock(c)
@@ -345,6 +378,33 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
         unlock(c)
     end
 end
+
+else # VERSION < v"1.2" — Channels use plain Condition with no lock.
+
+function _take_buffered_cancellable(c::Channel, token::CancellationToken)
+    # Register a callback that notifies cond_take to wake us up.
+    # On Julia < 1.2 there is only cooperative scheduling (no threads),
+    # so no lock/completed guard is needed.
+    reg = register(token) do
+        @_spawn notify(c.cond_take)
+    end
+
+    try
+        while isempty(c.data)
+            is_cancellation_requested(token) && throw(OperationCanceledException(token))
+            Base.check_channel_state(c)
+            wait(c.cond_take)
+        end
+        is_cancellation_requested(token) && throw(OperationCanceledException(token))
+        v = popfirst!(c.data)
+        notify(c.cond_put, nothing, false, false)
+        return v
+    finally
+        close(reg)
+    end
+end
+
+end # @static if VERSION >= v"1.2"
 
 # 0-size channel
 function _take_unbuffered_cancellable(c::Channel{T}, token::CancellationToken) where T
