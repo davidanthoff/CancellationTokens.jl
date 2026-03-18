@@ -364,3 +364,56 @@ end
     end
     @test reg isa CancellationTokenRegistration
 end
+
+# ---------------------------------------------------------------------------
+# Type stability — @inferred checks for all public methods
+# ---------------------------------------------------------------------------
+
+@testitem "Type stability (@inferred) of all public methods" begin
+    # --- Core constructors ---
+    src = @inferred CancellationTokenSource()
+    timeout_src = @inferred CancellationTokenSource(0.5)
+    cancel(timeout_src)  # clean up timer
+
+    src1 = CancellationTokenSource()
+    src2 = CancellationTokenSource()
+    combined = @inferred CancellationTokenSource(get_token(src1), get_token(src2))
+    cancel(src1)
+
+    # --- get_token ---
+    token = @inferred get_token(src)
+
+    # --- is_cancellation_requested ---
+    @test @inferred(is_cancellation_requested(token)) == false
+
+    # --- register / close(registration) ---
+    reg = @inferred register(() -> nothing, token)
+    @inferred close(reg)
+
+    # --- cancel / close(source) ---
+    @inferred cancel(src)
+    @inferred close(src)
+
+    # --- wait(::CancellationToken) on already-cancelled token ---
+    @inferred wait(token)
+
+    # --- OperationCanceledException ---
+    ex = @inferred OperationCanceledException(token)
+    @test @inferred(get_token(ex)) === token
+
+    # --- Channel operations ---
+    ch = Channel{Int}(10)
+    put!(ch, 42)
+    put!(ch, 43)
+
+    src3 = CancellationTokenSource()
+    @inferred wait(ch, get_token(src3))
+    @test @inferred(take!(ch, get_token(src3))) == 42
+
+    # --- sleep (normal completion, zero duration) ---
+    src4 = CancellationTokenSource()
+    @inferred sleep(0.0, get_token(src4))
+
+    cancel(src3)
+    cancel(src4)
+end

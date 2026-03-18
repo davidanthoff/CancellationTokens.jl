@@ -511,4 +511,39 @@ end
 
 include("augment_base.jl")
 
+# ---------------------------------------------------------------------------
+# Precompile directives — all methods are type-stable, so precompile()
+# cascades to all inferrable callees automatically.
+# ---------------------------------------------------------------------------
+
+# Constructors
+precompile(Tuple{Type{CancellationTokenSource}})
+precompile(Tuple{Type{CancellationTokenSource}, Float64})
+precompile(Tuple{Type{CancellationTokenSource}, CancellationToken, CancellationToken})
+precompile(Tuple{Type{OperationCanceledException}, CancellationToken})
+
+# Core API
+precompile(cancel, (CancellationTokenSource,))
+precompile(get_token, (CancellationTokenSource,))
+precompile(get_token, (OperationCanceledException,))
+precompile(is_cancellation_requested, (CancellationToken,))
+precompile(Tuple{typeof(register), Any, CancellationToken})
+
+# Base extensions — CancellationTokens core
+precompile(wait, (CancellationToken,))
+precompile(close, (CancellationTokenSource,))
+precompile(close, (CancellationTokenRegistration,))
+
+# Base extensions — augment_base
+precompile(sleep, (Float64, CancellationToken))
+precompile(wait, (Channel{Any}, CancellationToken))
+precompile(take!, (Channel{Any}, CancellationToken))
+precompile(readline, (Sockets.TCPSocket, CancellationToken))
+precompile(readline, (Sockets.PipeEndpoint, CancellationToken))
+
+# Internal hot paths
+precompile(_internal_notify, (CancellationTokenSource,))
+precompile(_is_cancellation_requested, (CancellationTokenSource,))
+precompile(Tuple{typeof(_register), Any, CancellationTokenSource})
+
 end # module
