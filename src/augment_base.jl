@@ -89,23 +89,97 @@ function Base.readline(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::
     # Register a callback that closes the socket on cancellation.
     # close() unblocks any pending reads, which we then detect and
     # translate into OperationCanceledException.
-    # The callback is run via @async to avoid deadlocking inside cancel(),
+    # The callback is run via @_spawn to avoid deadlocking inside cancel(),
     # since register callbacks execute synchronously.
     reg = register(token) do
-        @async close(s)
+        @_spawn close(s)
     end
 
     try
         result = readline(s; keep=keep)
         # readline returns "" on a closed socket without throwing.
-        # Check if cancellation caused the close.
-        if is_cancellation_requested(token)
+        # Only treat this as cancellation when the empty result was
+        # caused by the cancellation callback closing the socket.
+        # If real data arrived, return it even if the token was
+        # cancelled in the meantime (.NET semantics: completed
+        # operations are not retroactively cancelled).
+        if result == "" && is_cancellation_requested(token)
             throw(OperationCanceledException(token))
         end
         return result
     catch ex
         # If cancellation caused the socket to close, translate the resulting
         # I/O error into OperationCanceledException.
+        if ex isa OperationCanceledException
+            rethrow()
+        end
+        if is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        rethrow()
+    finally
+        close(reg)
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Base.read with cancellation  (sockets only)
+# ---------------------------------------------------------------------------
+
+"""
+    read(socket::Union{Sockets.PipeEndpoint, Sockets.TCPSocket},
+         nb::Integer, token::CancellationToken)
+
+Read `nb` bytes from `socket`, but throw [`OperationCanceledException`](@ref)
+if `token` is cancelled before enough data arrives.
+
+!!! warning "Cancellation closes the socket"
+    When `token` is cancelled, the underlying socket is **closed** to unblock
+    the read.  This means the socket is no longer usable after cancellation.
+
+    This is the only safe way to interrupt a socket read without corrupting
+    other tasks that may be waiting on the same socket condition variable.
+    Closing the socket ensures all readers receive a clean I/O error rather
+    than having a foreign `OperationCanceledException` injected into
+    unrelated tasks.
+
+    For most timeout use cases this is the desired behaviour — if a read
+    timed out, the protocol-level state is typically indeterminate anyway
+    and the connection should be re-established.
+
+# Examples
+
+```julia
+src = CancellationTokenSource(5.0)  # 5 s timeout
+try
+    data = read(socket, 1024, get_token(src))
+catch ex
+    if ex isa OperationCanceledException
+        # socket has been closed; reconnect if needed
+    end
+end
+```
+"""
+function Base.read(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, nb::Integer, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+
+    reg = register(token) do
+        @async close(s)
+    end
+
+    try
+        result = read(s, nb)
+        # read returns a short result on a closed socket without
+        # throwing.  Only treat this as cancellation when the short
+        # read was caused by the cancellation callback closing the
+        # socket.  If all nb bytes arrived, return them even if the
+        # token was cancelled in the meantime (.NET semantics:
+        # completed operations are not retroactively cancelled).
+        if length(result) < nb && is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        return result
+    catch ex
         if ex isa OperationCanceledException
             rethrow()
         end
@@ -155,7 +229,7 @@ function Base.wait(c::Channel, token::CancellationToken)
     # register callbacks are executed synchronously by cancel().
     reg = register(token) do
         if !Threads.atomic_xchg!(done, true)
-            @async begin
+            @_spawn begin
                 lock(c) do
                     # Only notify if the main operation hasn't finished yet.
                     if !completed[]
@@ -233,7 +307,7 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
         # register callbacks are executed synchronously by cancel().
         reg = register(token) do
             if !Threads.atomic_xchg!(done, true)
-                @async begin
+                @_spawn begin
                     lock(c) do
                         # Only notify if the main operation hasn't finished yet.
                         if !completed[]

@@ -66,12 +66,12 @@ end
     @test true
 end
 
-@testitem "wait blocks until cancel is called" begin
+@testitem "wait blocks until cancel is called" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     done = Ref(false)
 
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -90,13 +90,13 @@ end
     @test true
 end
 
-@testitem "Multiple waiters all unblock on cancel" begin
+@testitem "Multiple waiters all unblock on cancel" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     results = Channel{Int}(10)
 
     for i in 1:5
-        @async begin
+        @spawn begin
             wait(token)
             put!(results, i)
         end
@@ -167,12 +167,12 @@ end
     @test !is_cancellation_requested(get_token(src1))
 end
 
-@testitem "Combined source - wait unblocks on any parent cancel" begin
+@testitem "Combined source - wait unblocks on any parent cancel" setup=[SpawnHelper] begin
     src1 = CancellationTokenSource()
     src2 = CancellationTokenSource()
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src2)
     end
