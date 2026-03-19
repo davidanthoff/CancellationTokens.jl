@@ -232,11 +232,14 @@ function Base.wait(c::Channel, token::CancellationToken)
     reg = register(token) do
         if !Threads.atomic_xchg!(done, true)
             @_spawn begin
-                lock(c) do
+                lock(c)
+                try
                     # Only notify if the main operation hasn't finished yet.
                     if !completed[]
                         notify(cond)
                     end
+                finally
+                    unlock(c)
                 end
             end
         end
@@ -341,11 +344,14 @@ function _take_buffered_cancellable(c::Channel, token::CancellationToken)
         reg = register(token) do
             if !Threads.atomic_xchg!(done, true)
                 @_spawn begin
-                    lock(c) do
+                    lock(c)
+                    try
                         # Only notify if the main operation hasn't finished yet.
                         if !completed[]
                             notify(c.cond_take)
                         end
+                    finally
+                        unlock(c)
                     end
                 end
             end
