@@ -193,6 +193,77 @@ function Base.read(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, nb::Integer
 end
 
 # ---------------------------------------------------------------------------
+# Base.readavailable with cancellation  (sockets only)
+# ---------------------------------------------------------------------------
+
+"""
+    readavailable(socket::Union{Sockets.PipeEndpoint, Sockets.TCPSocket},
+                  token::CancellationToken)
+
+Read all available bytes from `socket`, blocking until at least one byte is
+available, but throw [`OperationCanceledException`](@ref) if `token` is
+cancelled before any data arrives.
+
+!!! warning "Cancellation closes the socket"
+    When `token` is cancelled, the underlying socket is **closed** to unblock
+    the read.  This means the socket is no longer usable after cancellation.
+
+    This is the only safe way to interrupt a socket read without corrupting
+    other tasks that may be waiting on the same socket condition variable.
+    Closing the socket ensures all readers receive a clean I/O error rather
+    than having a foreign `OperationCanceledException` injected into
+    unrelated tasks.
+
+    For most timeout use cases this is the desired behaviour — if a read
+    timed out, the protocol-level state is typically indeterminate anyway
+    and the connection should be re-established.
+
+# Examples
+
+```julia
+src = CancellationTokenSource(5.0)  # 5 s timeout
+try
+    data = readavailable(socket, get_token(src))
+catch ex
+    if ex isa OperationCanceledException
+        # socket has been closed; reconnect if needed
+    end
+end
+```
+"""
+function Base.readavailable(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+
+    reg = register(token) do
+        @async close(s)
+    end
+
+    try
+        result = readavailable(s)
+        # readavailable returns an empty Vector on a closed socket without
+        # throwing.  Only treat an empty result as cancellation when the
+        # cancellation callback closed the socket.  If real data arrived,
+        # return it even if the token was cancelled in the meantime
+        # (.NET semantics: completed operations are not retroactively
+        # cancelled).
+        if isempty(result) && is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        return result
+    catch ex
+        if ex isa OperationCanceledException
+            rethrow()
+        end
+        if is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        rethrow()
+    finally
+        close(reg)
+    end
+end
+
+# ---------------------------------------------------------------------------
 # Base.wait(::Channel, ::CancellationToken)
 # ---------------------------------------------------------------------------
 

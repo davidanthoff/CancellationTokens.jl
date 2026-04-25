@@ -5,6 +5,12 @@ All notable changes to CancellationTokens.jl will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- `Base.readavailable(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::CancellationToken)` for cancellable best-effort socket reads (closes socket on cancellation, like `readline` and `read`).
+
 ## [2.0.0] - 2026-03-17
 
 ### Breaking
