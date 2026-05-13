@@ -8,22 +8,22 @@
     sleep(0.1, get_token(src))
     elapsed = time() - t0
     @test elapsed >= 0.05
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
-@testitem "sleep throws OperationCanceledException on cancel" begin
+@testitem "sleep throws OperationCanceledException on cancel" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
     @test_throws OperationCanceledException sleep(20.0, get_token(src))
 end
 
-@testitem "sleep - exception carries the correct token" begin
+@testitem "sleep - exception carries the correct token" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -42,9 +42,9 @@ end
     @test_throws OperationCanceledException sleep(20.0, get_token(src))
 end
 
-@testitem "sleep - cancellation returns faster than timeout" begin
+@testitem "sleep - cancellation returns faster than timeout" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -61,29 +61,29 @@ end
 @testitem "sleep - zero duration completes immediately" begin
     src = CancellationTokenSource()
     sleep(0.0, get_token(src))
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
 # ---------------------------------------------------------------------------
 # Base.wait(::Channel, ::CancellationToken)
 # ---------------------------------------------------------------------------
 
-@testitem "wait(Channel) returns when channel becomes ready" begin
+@testitem "wait(Channel) returns when channel becomes ready" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(1)
-    @async begin
+    @spawn begin
         sleep(0.1)
         put!(ch, 42)
     end
     wait(ch, get_token(src))
     @test isready(ch)
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
-@testitem "wait(Channel) throws on cancellation" begin
+@testitem "wait(Channel) throws on cancellation" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(1)
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -105,11 +105,11 @@ end
     @test_throws OperationCanceledException wait(ch, get_token(src))
 end
 
-@testitem "wait(Channel) exception carries correct token" begin
+@testitem "wait(Channel) exception carries correct token" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     ch = Channel{Int}(1)
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -141,10 +141,10 @@ end
     @test v == 42
 end
 
-@testitem "take!(Channel) blocks and returns when data arrives" begin
+@testitem "take!(Channel) blocks and returns when data arrives" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(10)
-    @async begin
+    @spawn begin
         sleep(0.1)
         put!(ch, 99)
     end
@@ -152,10 +152,10 @@ end
     @test v == 99
 end
 
-@testitem "take!(Channel) throws on cancellation" begin
+@testitem "take!(Channel) throws on cancellation" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(Inf)
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -171,11 +171,11 @@ end
     @test_throws OperationCanceledException take!(ch, get_token(src))
 end
 
-@testitem "take!(Channel) exception carries correct token" begin
+@testitem "take!(Channel) exception carries correct token" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     ch = Channel{Int}(Inf)
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -196,6 +196,105 @@ end
     end
     for i in 1:5
         @test take!(ch, get_token(src)) == i
+    end
+end
+
+# ---------------------------------------------------------------------------
+# Regression tests for data race fix (issue #23)
+# Ensure that cancellation callbacks don't inject spurious notifications
+# into shared condition variables after the main operation completes.
+# ---------------------------------------------------------------------------
+
+@testitem "wait(Channel) - cancel after data arrives does not leak notifications" begin
+    # Simulate: data arrives, then cancel fires immediately after.
+    # A second waiter on the same channel must NOT be spuriously woken.
+    for _ in 1:50  # repeat to exercise timing
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+
+        # Put data so that wait returns, then cancel right after.
+        put!(ch, 1)
+        wait(ch, get_token(src))
+        cancel(src)
+        yield()  # let any stray async tasks run
+
+        # A second wait with a fresh token must still block (channel was
+        # not taken from, so data is still there — isready returns true
+        # and wait returns immediately). This verifies no error was injected.
+        src2 = CancellationTokenSource()
+        wait(ch, get_token(src2))
+        @test isready(ch)
+    end
+end
+
+@testitem "take!(Channel) - cancel after take succeeds does not leak notifications" begin
+    for _ in 1:50
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+
+        put!(ch, 42)
+        v = take!(ch, get_token(src))
+        @test v == 42
+        cancel(src)
+        yield()
+
+        # A second waiter should block normally, not get a spurious wakeup.
+        src2 = CancellationTokenSource(0.1)
+        @test_throws OperationCanceledException take!(ch, get_token(src2))
+    end
+end
+
+@testitem "wait(Channel) - concurrent cancel and data arrival" setup=[SpawnHelper] begin
+    for _ in 1:20
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+        token = get_token(src)
+
+        # Race: put data and cancel at roughly the same time.
+        @spawn begin
+            yield()
+            put!(ch, 1)
+        end
+        @spawn begin
+            yield()
+            cancel(src)
+        end
+
+        # Should either return normally or throw OperationCanceledException.
+        try
+            wait(ch, token)
+        catch ex
+            @test ex isa OperationCanceledException
+        end
+
+        # Channel must still be usable regardless of outcome.
+        if isready(ch)
+            @test take!(ch) == 1
+        end
+    end
+end
+
+@testitem "take!(Channel) - concurrent cancel and data arrival" setup=[SpawnHelper] begin
+    for _ in 1:20
+        ch = Channel{Int}(1)
+        src = CancellationTokenSource()
+        token = get_token(src)
+
+        @spawn begin
+            yield()
+            put!(ch, 99)
+        end
+        @spawn begin
+            yield()
+            cancel(src)
+        end
+
+        try
+            v = take!(ch, token)
+            @test v == 99
+        catch ex
+            @test ex isa OperationCanceledException
+        end
     end
 end
 
@@ -223,11 +322,11 @@ end
     @test_throws ErrorException take!(ch, get_token(src))
 end
 
-@testitem "take!(Channel) - channel usable after cancelled take!" begin
+@testitem "take!(Channel) - channel usable after cancelled take!" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(10)
 
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -247,10 +346,10 @@ end
     @test v isa String
 end
 
-@testitem "take!(Channel) - multiple sequential takes with token" begin
+@testitem "take!(Channel) - multiple sequential takes with token" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     ch = Channel{Int}(10)
-    @async begin
+    @spawn begin
         for i in 1:3
             sleep(0.05)
             put!(ch, i)

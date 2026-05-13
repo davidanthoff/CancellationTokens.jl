@@ -57,3 +57,23 @@ Sockets.accept(::Sockets.PipeServer, ::CancellationTokens.CancellationToken)
 Sockets.accept(::Sockets.TCPServer, ::Sockets.TCPSocket, ::CancellationTokens.CancellationToken)
 Sockets.accept(::Sockets.PipeServer, ::Sockets.PipeEndpoint, ::CancellationTokens.CancellationToken)
 ```
+
+## read (sockets)
+
+```julia
+read(socket, nb, token)
+```
+
+```@docs
+Base.read(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::Integer, ::CancellationTokens.CancellationToken)
+```
+
+## readavailable (sockets)
+
+```julia
+readavailable(socket, token)
+```
+
+```@docs
+Base.readavailable(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::CancellationTokens.CancellationToken)
+```

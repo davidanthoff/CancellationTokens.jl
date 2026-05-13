@@ -4,13 +4,13 @@
 
 @testitem "CancellationTokenSource starts in non-cancelled state" begin
     src = CancellationTokenSource()
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
 end
 
 @testitem "cancel sets is_cancellation_requested" begin
     src = CancellationTokenSource()
     cancel(src)
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 @testitem "cancel is idempotent" begin
@@ -18,13 +18,13 @@ end
     cancel(src)
     cancel(src)
     cancel(src)
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 @testitem "close cancels the source" begin
     src = CancellationTokenSource()
     close(src)
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 # ---------------------------------------------------------------------------
@@ -66,12 +66,12 @@ end
     @test true
 end
 
-@testitem "wait blocks until cancel is called" begin
+@testitem "wait blocks until cancel is called" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     done = Ref(false)
 
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src)
     end
@@ -79,7 +79,7 @@ end
     wait(token)
     done[] = true
     @test done[]
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 @testitem "wait returns immediately when cancelled before wait but after token creation" begin
@@ -90,13 +90,13 @@ end
     @test true
 end
 
-@testitem "Multiple waiters all unblock on cancel" begin
+@testitem "Multiple waiters all unblock on cancel" setup=[SpawnHelper] begin
     src = CancellationTokenSource()
     token = get_token(src)
     results = Channel{Int}(10)
 
     for i in 1:5
-        @async begin
+        @spawn begin
             wait(token)
             put!(results, i)
         end
@@ -119,16 +119,16 @@ end
 
 @testitem "Timeout source cancels after specified duration" begin
     src = CancellationTokenSource(0.1)
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
     wait(get_token(src))
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 @testitem "Timeout source can be cancelled early" begin
     src = CancellationTokenSource(10.0)
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(get_token(src))
     cancel(src)
-    @test is_cancellation_requested(src)
+    @test is_cancellation_requested(get_token(src))
 end
 
 @testitem "Timeout source - wait returns after timeout" begin
@@ -149,10 +149,10 @@ end
     src2 = CancellationTokenSource()
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
-    @test !is_cancellation_requested(combined)
+    @test !is_cancellation_requested(get_token(combined))
     cancel(src1)
     sleep(0.05)
-    @test is_cancellation_requested(combined)
+    @test is_cancellation_requested(get_token(combined))
 end
 
 @testitem "Combined source cancels when second token cancels" begin
@@ -162,25 +162,25 @@ end
 
     cancel(src2)
     sleep(0.05)
-    @test is_cancellation_requested(combined)
+    @test is_cancellation_requested(get_token(combined))
     # src1 should not be affected
-    @test !is_cancellation_requested(src1)
+    @test !is_cancellation_requested(get_token(src1))
 end
 
-@testitem "Combined source - wait unblocks on any parent cancel" begin
+@testitem "Combined source - wait unblocks on any parent cancel" setup=[SpawnHelper] begin
     src1 = CancellationTokenSource()
     src2 = CancellationTokenSource()
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
-    @async begin
+    @spawn begin
         sleep(0.1)
         cancel(src2)
     end
 
     wait(get_token(combined))
-    @test is_cancellation_requested(combined)
-    @test !is_cancellation_requested(src1)
-    @test is_cancellation_requested(src2)
+    @test is_cancellation_requested(get_token(combined))
+    @test !is_cancellation_requested(get_token(src1))
+    @test is_cancellation_requested(get_token(src2))
 end
 
 @testitem "Combined source with already-cancelled token cancels immediately" begin
@@ -190,7 +190,7 @@ end
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
     sleep(0.05)
-    @test is_cancellation_requested(combined)
+    @test is_cancellation_requested(get_token(combined))
 end
 
 @testitem "Combined source with already-cancelled token stress test" begin
@@ -202,8 +202,8 @@ end
         cancel(src1)
         src2 = CancellationTokenSource()
         combined = CancellationTokenSource(get_token(src1), get_token(src2))
-        @test is_cancellation_requested(combined)
-        @test !is_cancellation_requested(src2)
+        @test is_cancellation_requested(get_token(combined))
+        @test !is_cancellation_requested(get_token(src2))
     end
 end
 
@@ -211,10 +211,10 @@ end
     src = CancellationTokenSource()
     combined = CancellationTokenSource(get_token(src))
 
-    @test !is_cancellation_requested(combined)
+    @test !is_cancellation_requested(get_token(combined))
     cancel(src)
     sleep(0.05)
-    @test is_cancellation_requested(combined)
+    @test is_cancellation_requested(get_token(combined))
 end
 
 @testitem "Combined source with three tokens" begin
@@ -225,9 +225,9 @@ end
 
     cancel(src3)
     sleep(0.05)
-    @test is_cancellation_requested(combined)
-    @test !is_cancellation_requested(src1)
-    @test !is_cancellation_requested(src2)
+    @test is_cancellation_requested(get_token(combined))
+    @test !is_cancellation_requested(get_token(src1))
+    @test !is_cancellation_requested(get_token(src2))
 end
 
 @testitem "Combined source with timeout token" begin
@@ -236,9 +236,9 @@ end
     combined = CancellationTokenSource(get_token(timeout_src), get_token(manual_src))
 
     wait(get_token(combined))
-    @test is_cancellation_requested(combined)
-    @test is_cancellation_requested(timeout_src)
-    @test !is_cancellation_requested(manual_src)
+    @test is_cancellation_requested(get_token(combined))
+    @test is_cancellation_requested(get_token(timeout_src))
+    @test !is_cancellation_requested(get_token(manual_src))
 end
 
 # ---------------------------------------------------------------------------
@@ -282,14 +282,11 @@ end
     @test called[]
 end
 
-@testitem "register with source directly" begin
+@testitem "register with source directly errors" begin
     src = CancellationTokenSource()
-    called = Ref(false)
-    register(src) do
-        called[] = true
+    @test_throws MethodError register(src) do
+        nothing
     end
-    cancel(src)
-    @test called[]
 end
 
 @testitem "deregistration prevents callback invocation" begin
@@ -344,10 +341,10 @@ end
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
     # Cancellation should propagate synchronously via callbacks
-    @test !is_cancellation_requested(combined)
+    @test !is_cancellation_requested(get_token(combined))
     cancel(src1)
     # No sleep needed — callback is synchronous
-    @test is_cancellation_requested(combined)
+    @test is_cancellation_requested(get_token(combined))
 end
 
 @testitem "combined source propagates synchronously from second parent" begin
@@ -356,8 +353,8 @@ end
     combined = CancellationTokenSource(get_token(src1), get_token(src2))
 
     cancel(src2)
-    @test is_cancellation_requested(combined)
-    @test !is_cancellation_requested(src1)
+    @test is_cancellation_requested(get_token(combined))
+    @test !is_cancellation_requested(get_token(src1))
 end
 
 @testitem "register returns CancellationTokenRegistration" begin
@@ -366,4 +363,64 @@ end
         nothing
     end
     @test reg isa CancellationTokenRegistration
+end
+
+# ---------------------------------------------------------------------------
+# Type stability — @inferred checks for all public methods
+# ---------------------------------------------------------------------------
+
+@testitem "Type stability (@inferred) of all public methods" begin
+    import Sockets
+
+    # --- Core constructors ---
+    src = @inferred CancellationTokenSource()
+    timeout_src = @inferred CancellationTokenSource(0.5)
+    cancel(timeout_src)  # clean up timer
+
+    src1 = CancellationTokenSource()
+    src2 = CancellationTokenSource()
+    combined = @inferred CancellationTokenSource(get_token(src1), get_token(src2))
+    cancel(src1)
+
+    # --- get_token ---
+    token = @inferred get_token(src)
+
+    # --- is_cancellation_requested ---
+    @test @inferred(is_cancellation_requested(token)) == false
+
+    # --- register / close(registration) ---
+    reg = @inferred register(() -> nothing, token)
+    @inferred close(reg)
+
+    # --- cancel / close(source) ---
+    @inferred cancel(src)
+    @inferred close(src)
+
+    # --- wait(::CancellationToken) on already-cancelled token ---
+    @inferred wait(token)
+
+    # --- OperationCanceledException ---
+    ex = @inferred OperationCanceledException(token)
+    @test @inferred(get_token(ex)) === token
+
+    # --- Channel operations ---
+    ch = Channel{Int}(10)
+    put!(ch, 42)
+    put!(ch, 43)
+
+    src3 = CancellationTokenSource()
+    @inferred wait(ch, get_token(src3))
+    @test @inferred(take!(ch, get_token(src3))) == 42
+
+    # --- sleep (normal completion, zero duration) ---
+    src4 = CancellationTokenSource()
+    @inferred sleep(0.0, get_token(src4))
+
+    # --- read (socket — just test that the method signature is inferrable
+    #     via precompile; can't call without a real socket) ---
+    @test precompile(read, (Sockets.TCPSocket, Int, CancellationToken))
+    @test precompile(read, (Sockets.PipeEndpoint, Int, CancellationToken))
+
+    cancel(src3)
+    cancel(src4)
 end
