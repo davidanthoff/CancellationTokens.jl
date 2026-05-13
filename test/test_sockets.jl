@@ -192,7 +192,7 @@ end
     client_conn = fetch(client_task)
 
     @test isa(server_conn, Sockets.TCPSocket)
-    @test !is_cancellation_requested(src)
+    @test !is_cancellation_requested(token)
 
     close(server_conn)
     close(client_conn)
@@ -322,7 +322,7 @@ end
         client_conn = fetch(client_task)
 
         @test isa(server_conn, Sockets.PipeEndpoint)
-        @test !is_cancellation_requested(src)
+        @test !is_cancellation_requested(token)
 
         close(server_conn)
         close(client_conn)
