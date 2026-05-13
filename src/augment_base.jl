@@ -267,18 +267,7 @@ end
 # Sockets.accept with cancellation
 # ---------------------------------------------------------------------------
 
-"""
-    Sockets.accept(server::Union{Sockets.TCPServer, Sockets.PipeServer},
-                   token::CancellationToken)
-    Sockets.accept(server::Union{Sockets.TCPServer, Sockets.PipeServer},
-                   client::Union{Sockets.TCPSocket, Sockets.PipeEndpoint},
-                   token::CancellationToken)
 
-Accept a connection from `server`, but abort with an error if `token` is
-cancelled before a client arrives.
-
-The listening server remains usable after cancellation.
-"""
 function _accept_cancellable(f, server, token::CancellationToken)
     is_cancellation_requested(token) && throw(OperationCanceledException(token))
 
@@ -309,18 +298,52 @@ function _accept_cancellable(f, server, token::CancellationToken)
     end
 end
 
+"""
+    Sockets.accept(server::Sockets.TCPServer,token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
 function Sockets.accept(server::Sockets.TCPServer, token::CancellationToken)
     return _accept_cancellable(() -> Sockets.accept(server), server, token)
 end
 
+"""
+    Sockets.accept(server::Sockets.PipeServer, token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
 function Sockets.accept(server::Sockets.PipeServer, token::CancellationToken)
     return _accept_cancellable(() -> Sockets.accept(server), server, token)
 end
 
+"""
+    Sockets.accept(server::Sockets.TCPServer, client::Sockets.TCPSocket,
+                   token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
 function Sockets.accept(server::Sockets.TCPServer, client::Sockets.TCPSocket, token::CancellationToken)
     return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
 end
 
+"""
+    Sockets.accept(server::Sockets.PipeServer, client::Sockets.PipeEndpoint,
+                   token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
 function Sockets.accept(server::Sockets.PipeServer, client::Sockets.PipeEndpoint, token::CancellationToken)
     return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
 end
