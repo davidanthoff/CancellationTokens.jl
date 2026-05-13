@@ -7,6 +7,16 @@ else
     _channel_wait_cond(c::Channel) = c.cond_take
 end
 
+# Helper: get the condition variable that a `Sockets.TCPServer` /
+# `Sockets.PipeServer` notifies on incoming connections.
+# Julia 1.2+ exposes a thread-safe `cond::Base.ThreadSynchronizer`;
+# Julia 1.0/1.1 expose a plain `connectnotify::Condition`.
+@static if :cond in fieldnames(Sockets.TCPServer)
+    _server_cond(server) = server.cond
+else
+    _server_cond(server) = server.connectnotify
+end
+
 # ---------------------------------------------------------------------------
 # Base.sleep with cancellation
 # ---------------------------------------------------------------------------
@@ -274,18 +284,34 @@ function _accept_cancellable(f, server, token::CancellationToken)
     callback_started = Threads.Atomic{Bool}(false)
     completed = Threads.Atomic{Bool}(false)
 
+    cond = _server_cond(server)
+
     reg = register(token) do
         if completed[]
             return
         end
 
         if !Threads.atomic_xchg!(callback_started, true)
-            @async begin
-                lock(server.cond) do
+            @async try
+                @static if VERSION >= v"1.2"
+                    # Julia 1.2+: `cond` is a `Base.ThreadSynchronizer` and
+                    # must be locked before notifying.
+                    lock(cond) do
+                        if !completed[]
+                            notify(cond, OperationCanceledException(token); error=true)
+                        end
+                    end
+                else
+                    # Julia 1.0/1.1: `cond` is a plain `Condition` with no
+                    # locking. Cooperative scheduling plus the
+                    # `callback_started` / `completed` atomics provide the
+                    # required mutual exclusion.
                     if !completed[]
-                        notify(server.cond, OperationCanceledException(token); error=true)
+                        notify(cond, OperationCanceledException(token); error=true)
                     end
                 end
+            catch err
+                Base.display_error(err, catch_backtrace())
             end
         end
     end
