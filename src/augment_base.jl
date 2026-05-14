@@ -295,11 +295,18 @@ function _accept_cancellable(f, server, token::CancellationToken)
             @async try
                 @static if VERSION >= v"1.2"
                     # Julia 1.2+: `cond` is a `Base.ThreadSynchronizer` and
-                    # must be locked before notifying.
-                    lock(cond) do
+                    # must be locked before notifying. Use explicit
+                    # lock/unlock rather than the `lock(f, c)` do-form,
+                    # because on Julia 1.2 `Base.GenericCondition` is not a
+                    # subtype of `AbstractLock` and the do-form has no
+                    # matching method.
+                    lock(cond)
+                    try
                         if !completed[]
                             notify(cond, OperationCanceledException(token); error=true)
                         end
+                    finally
+                        unlock(cond)
                     end
                 else
                     # Julia 1.0/1.1: `cond` is a plain `Condition` with no
