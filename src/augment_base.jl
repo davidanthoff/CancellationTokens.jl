@@ -7,6 +7,16 @@ else
     _channel_wait_cond(c::Channel) = c.cond_take
 end
 
+# Helper: get the condition variable that a `Sockets.TCPServer` /
+# `Sockets.PipeServer` notifies on incoming connections.
+# Julia 1.2+ exposes a thread-safe `cond::Base.ThreadSynchronizer`;
+# Julia 1.0/1.1 expose a plain `connectnotify::Condition`.
+@static if :cond in fieldnames(Sockets.TCPServer)
+    _server_cond(server) = server.cond
+else
+    _server_cond(server) = server.connectnotify
+end
+
 # ---------------------------------------------------------------------------
 # Base.sleep with cancellation
 # ---------------------------------------------------------------------------
@@ -261,6 +271,114 @@ function Base.readavailable(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, to
     finally
         close(reg)
     end
+end
+
+# ---------------------------------------------------------------------------
+# Sockets.accept with cancellation
+# ---------------------------------------------------------------------------
+
+
+function _accept_cancellable(f, server, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+
+    callback_started = Threads.Atomic{Bool}(false)
+    completed = Threads.Atomic{Bool}(false)
+
+    cond = _server_cond(server)
+
+    reg = register(token) do
+        if completed[]
+            return
+        end
+
+        if !Threads.atomic_xchg!(callback_started, true)
+            @async try
+                @static if VERSION >= v"1.2"
+                    # Julia 1.2+: `cond` is a `Base.ThreadSynchronizer` and
+                    # must be locked before notifying. Use explicit
+                    # lock/unlock rather than the `lock(f, c)` do-form,
+                    # because on Julia 1.2 `Base.GenericCondition` is not a
+                    # subtype of `AbstractLock` and the do-form has no
+                    # matching method.
+                    lock(cond)
+                    try
+                        if !completed[]
+                            notify(cond, OperationCanceledException(token); error=true)
+                        end
+                    finally
+                        unlock(cond)
+                    end
+                else
+                    # Julia 1.0/1.1: `cond` is a plain `Condition` with no
+                    # locking. Cooperative scheduling plus the
+                    # `callback_started` / `completed` atomics provide the
+                    # required mutual exclusion.
+                    if !completed[]
+                        notify(cond, OperationCanceledException(token); error=true)
+                    end
+                end
+            catch err
+                Base.display_error(err, catch_backtrace())
+            end
+        end
+    end
+
+    try
+        return f()
+    finally
+        close(reg)
+        Threads.atomic_xchg!(completed, true)
+    end
+end
+
+"""
+    Sockets.accept(server::Sockets.TCPServer,token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
+function Sockets.accept(server::Sockets.TCPServer, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server), server, token)
+end
+
+"""
+    Sockets.accept(server::Sockets.PipeServer, token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
+function Sockets.accept(server::Sockets.PipeServer, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server), server, token)
+end
+
+"""
+    Sockets.accept(server::Sockets.TCPServer, client::Sockets.TCPSocket,
+                   token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
+function Sockets.accept(server::Sockets.TCPServer, client::Sockets.TCPSocket, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
+end
+
+"""
+    Sockets.accept(server::Sockets.PipeServer, client::Sockets.PipeEndpoint,
+                   token::CancellationToken)
+
+Accept a connection from `server`, but abort with an error if `token` is
+cancelled before a client arrives.
+
+The listening server remains usable after cancellation.
+"""
+function Sockets.accept(server::Sockets.PipeServer, client::Sockets.PipeEndpoint, token::CancellationToken)
+    return _accept_cancellable(() -> Sockets.accept(server, client), server, token)
 end
 
 # ---------------------------------------------------------------------------

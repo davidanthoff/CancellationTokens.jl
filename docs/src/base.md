@@ -44,6 +44,20 @@ readline(socket, token; keep=false)
 Base.readline(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::CancellationTokens.CancellationToken)
 ```
 
+## accept (sockets)
+
+```julia
+Sockets.accept(server, token)
+Sockets.accept(server, client, token)
+```
+
+```@docs
+Sockets.accept(::Sockets.TCPServer, ::CancellationTokens.CancellationToken)
+Sockets.accept(::Sockets.PipeServer, ::CancellationTokens.CancellationToken)
+Sockets.accept(::Sockets.TCPServer, ::Sockets.TCPSocket, ::CancellationTokens.CancellationToken)
+Sockets.accept(::Sockets.PipeServer, ::Sockets.PipeEndpoint, ::CancellationTokens.CancellationToken)
+```
+
 ## read (sockets)
 
 ```julia
