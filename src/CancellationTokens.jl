@@ -29,40 +29,18 @@ import Sockets
 
 export CancellationTokenSource, CancellationToken, CancellationTokenRegistration, get_token, is_cancellation_requested, cancel, register, OperationCanceledException
 
-include("event.jl")
-
 @enum CancellationTokenSourceStates NotCanceledState=1 NotifyingState=2 NotifyingCompleteState=3
 
-# ---------------------------------------------------------------------------
-# Struct definition — Julia 1.7+ uses @atomic fields for lock-free operations
-# matching the .NET CAS + volatile pattern.  Older versions use ReentrantLock.
-# ---------------------------------------------------------------------------
+mutable struct CancellationTokenSource
+    @atomic _state::CancellationTokenSourceStates
+    _timer::Union{Nothing,Timer}
+    @atomic _cond::Union{Nothing,Threads.Condition}
+    @atomic _callbacks::Union{Nothing,Vector{Pair{Int,Any}}}  # id => callback, protected by _lock
+    _next_callback_id::Int
+    _lock::ReentrantLock
 
-@static if VERSION >= v"1.7"
-    mutable struct CancellationTokenSource
-        @atomic _state::CancellationTokenSourceStates
-        _timer::Union{Nothing,Timer}
-        @atomic _kernel_event::Union{Nothing,Event}
-        _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
-        _next_callback_id::Int
-        _lock::ReentrantLock
-
-        function CancellationTokenSource()
-            return new(NotCanceledState, nothing, nothing, Pair{Int,Any}[], 1, ReentrantLock())
-        end
-    end
-else
-    mutable struct CancellationTokenSource
-        _state::CancellationTokenSourceStates
-        _timer::Union{Nothing,Timer}
-        _kernel_event::Union{Nothing,Event}
-        _callbacks::Vector{Pair{Int,Any}}  # id => callback, protected by _lock
-        _next_callback_id::Int
-        _lock::ReentrantLock
-
-        function CancellationTokenSource()
-            return new(NotCanceledState, nothing, nothing, Pair{Int,Any}[], 1, ReentrantLock())
-        end
+    function CancellationTokenSource()
+        return new(NotCanceledState, nothing, nothing, nothing, 1, ReentrantLock())
     end
 end
 
@@ -108,7 +86,7 @@ combined = CancellationTokenSource(get_token(src1), get_token(src2))
 CancellationTokenSource
 
 # ---------------------------------------------------------------------------
-# Timer constructor (shared — _timer is not atomic in either version)
+# Timer constructor
 # ---------------------------------------------------------------------------
 
 function CancellationTokenSource(timespan_in_seconds::Real)
@@ -140,30 +118,36 @@ end
                 close(x._timer)
                 x._timer = nothing
             end
-            cbs = copy(x._callbacks)
-            empty!(x._callbacks)
-            cbs
+
+            cbs = x._callbacks
+            @atomic x._callbacks = nothing
+
+            return cbs
         end
 
-        # Signal the event if a waiter has installed one.
-        event = @atomic :acquire x._kernel_event
-        if event !== nothing
-            notify(event)
-        end
-
-        # Invoke registered callbacks synchronously (like .NET).
-        for (_, cb) in callbacks
-            try
-                cb()
-            catch
+        # Signal the condition if a waiter has installed one.
+        cond = @atomic x._cond
+        if cond !== nothing
+            lock(cond) do
+                notify(cond)
             end
         end
 
-        @atomic :release x._state = NotifyingCompleteState
+        # Invoke registered callbacks synchronously (like .NET).
+        if callbacks !== nothing
+            for (_, cb) in callbacks
+                try
+                    cb()
+                catch
+                end
+            end
+        end
+
+        @atomic x._state = NotifyingCompleteState
     end
 
     # Single atomic read — equivalent to .NET's volatile read of _state.
-    _is_cancellation_requested(x::CancellationTokenSource) = (@atomic :acquire x._state) > NotCanceledState
+    _is_cancellation_requested(x::CancellationTokenSource) = (@atomic x._state) > NotCanceledState
 
 else # VERSION < v"1.7"
 
@@ -177,26 +161,28 @@ else # VERSION < v"1.7"
                     x._timer = nothing
                 end
 
-                cbs = copy(x._callbacks)
-                empty!(x._callbacks)
+                cbs = x._callbacks
+                x._callbacks = nothing
 
-                # Notify the event but keep it alive — its `set` flag ensures
+                # Notify the condition but keep it alive — its `set` flag ensures
                 # any future wait() calls return immediately.
-                if x._kernel_event !== nothing
-                    notify(x._kernel_event)
+                if x._cond !== nothing
+                    notify(x._cond)
                 end
 
                 x._state = NotifyingCompleteState
                 return cbs
             end
-            return Pair{Int,Any}[]
+            return nothing
         end
 
         # Invoke registered callbacks synchronously (like .NET).
-        for (_, cb) in callbacks
-            try
-                cb()
-            catch
+        if callbacks !== nothing
+            for (_, cb) in callbacks
+                try
+                    cb()
+                catch
+                end
             end
         end
     end
@@ -271,58 +257,69 @@ is_cancellation_requested(x::CancellationToken) = _is_cancellation_requested(x._
 
 @static if VERSION >= v"1.7"
 
-    # Lock-free wait matching .NET's WaitHandle pattern:
-    #  1. Atomic read of _kernel_event
-    #  2. If nothing, CAS a new Event into place (loser uses winner's event)
-    #  3. Double-check _state after installing — if cancel() already ran and
-    #     missed our event, we signal it ourselves (idempotent).
-    function Base.wait(x::CancellationToken)
-        # Fast path (lock-free atomic read)
-        is_cancellation_requested(x) && return
-
-        # Get or create event via CAS
-        event = @atomic :acquire x._source._kernel_event
-        if event === nothing
-            new_event = Event()
-            (old, success) = @atomicreplace x._source._kernel_event nothing => new_event
-            event = success ? new_event : old
+    function _get_or_create_condition(src::CancellationTokenSource)
+        # Fast path: check if condition already exists.
+        cond = @atomic src._cond
+        if cond !== nothing
+            return cond
         end
 
-        # Double-check: if cancel() already ran, it may have read
-        # _kernel_event as nothing and skipped notify().
-        # The seq_cst CAS on _kernel_event and the seq_cst CAS on _state
-        # guarantee that at least one side observes the other's write.
-        # notify() is idempotent, so double-signaling is harmless.
-        if is_cancellation_requested(x)
-            notify(event)
-            return
+        # Slow path: create a new condition and install it via CAS.
+        new_cond = Threads.Condition(src._lock)
+        (old, success) = @atomicreplace src._cond nothing => new_cond
+        return success ? new_cond : old
+    end
+
+    function _get_or_create_callbacks(src::CancellationTokenSource)
+        # Fast path: check if condition already exists.
+        callbacks = @atomic src._callbacks
+        if callbacks !== nothing
+            return callbacks
         end
 
-        wait(event)
+        # Slow path: create a new condition and install it via CAS.
+        new_callbacks = Vector{Pair{Int,Any}}()
+        (old, success) = @atomicreplace src._callbacks nothing => new_callbacks
+        return success ? new_callbacks : old
     end
 
 else # VERSION < v"1.7"
 
-    function Base.wait(x::CancellationToken)
-        # Fast path (no lock needed)
-        is_cancellation_requested(x) && return
-
-        # Atomically check state + get/create event under the lock.
-        # This prevents the TOCTOU race where cancel() fires between our
-        # check above and the wait() below.
-        event = lock(x._source._lock) do
-            is_cancellation_requested(x) && return nothing
-            if x._source._kernel_event === nothing
-                x._source._kernel_event = Event()
+    function _get_or_create_condition(src::CancellationTokenSource)
+        lock(src._lock) do
+            if src._cond === nothing
+                src._cond = Threads.Condition(src._lock)
             end
-            return x._source._kernel_event
+            return src._cond
         end
-
-        event === nothing && return
-        wait(event)
     end
 
+    function _get_or_create_callbacks(src::CancellationTokenSource)
+        lock(src._lock) do
+            if src._callbacks === nothing
+                src._callbacks = Vector{Pair{Int,Any}}()
+            end
+            return src._callbacks
+        end
+    end
 end
+
+function Base.wait(x::CancellationToken)
+    # Fast path (no lock needed)
+    is_cancellation_requested(x) && return
+
+    cond = _get_or_create_condition(x._source)
+
+    lock(cond)
+    try
+        while !is_cancellation_requested(x)
+                wait(cond)
+        end
+    finally
+        unlock(cond)
+    end
+end
+
 
 @doc """
     wait(token::CancellationToken)
@@ -360,9 +357,6 @@ struct OperationCanceledException <: Exception
     _token::CancellationToken
 end
 
-struct WaitCanceledException <: Exception
-end
-
 """
     get_token(ex::OperationCanceledException) -> CancellationToken
 
@@ -394,6 +388,9 @@ callback was already deregistered or if the source has already been cancelled.
 """
 function Base.close(r::CancellationTokenRegistration)
     lock(r._source._lock) do
+        if r._id == 0 || r._source._callbacks === nothing
+            return
+        end
         idx = findfirst(p -> p.first == r._id, r._source._callbacks)
         if idx !== nothing
             deleteat!(r._source._callbacks, idx)
@@ -452,6 +449,8 @@ function _register(callback, src::CancellationTokenSource)
         return CancellationTokenRegistration(src, 0)
     end
 
+    callbacks = _get_or_create_callbacks(src)
+
     id = lock(src._lock) do
         # Double-check under lock: cancel() may have won the race.
         if _is_cancellation_requested(src)
@@ -459,7 +458,7 @@ function _register(callback, src::CancellationTokenSource)
         end
         cb_id = src._next_callback_id
         src._next_callback_id = cb_id + 1
-        push!(src._callbacks, cb_id => callback)
+        push!(callbacks, cb_id => callback)
         return cb_id
     end
 
