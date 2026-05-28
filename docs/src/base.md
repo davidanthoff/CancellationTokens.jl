@@ -68,12 +68,14 @@ read(socket, nb, token)
 Base.read(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::Integer, ::CancellationTokens.CancellationToken)
 ```
 
-## readavailable (sockets)
+## readavailable
 
 ```julia
 readavailable(socket, token)
+readavailable(pipe, token)
 ```
 
 ```@docs
 Base.readavailable(::Union{Sockets.PipeEndpoint, Sockets.TCPSocket}, ::CancellationTokens.CancellationToken)
+Base.readavailable(::Base.Pipe, ::CancellationTokens.CancellationToken)
 ```

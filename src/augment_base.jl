@@ -273,6 +273,68 @@ function Base.readavailable(s::Union{Sockets.PipeEndpoint,Sockets.TCPSocket}, to
     end
 end
 
+"""
+    readavailable(pipe::Base.Pipe, token::CancellationToken)
+
+Read all available bytes from `pipe`, blocking until at least one byte is
+available, but throw [`OperationCanceledException`](@ref) if `token` is
+cancelled before any data arrives.
+
+!!! warning "Cancellation closes the pipe"
+    When `token` is cancelled, the underlying pipe is **closed** to unblock
+    the read.  Because `close(::Base.Pipe)` closes both ends of the pipe,
+    the pipe is no longer usable after cancellation.
+
+    This is the only safe way to interrupt a pipe read without corrupting
+    other tasks that may be waiting on the same pipe.  Closing the pipe
+    ensures all readers receive a clean I/O error rather than having a
+    foreign `OperationCanceledException` injected into unrelated tasks.
+
+# Examples
+
+```julia
+src = CancellationTokenSource(5.0)  # 5 s timeout
+try
+    data = readavailable(pipe, get_token(src))
+catch ex
+    if ex isa OperationCanceledException
+        # pipe has been closed; recreate if needed
+    end
+end
+```
+"""
+function Base.readavailable(p::Base.Pipe, token::CancellationToken)
+    is_cancellation_requested(token) && throw(OperationCanceledException(token))
+
+    reg = register(token) do
+        @async close(p)
+    end
+
+    try
+        result = readavailable(p)
+        # readavailable returns an empty Vector on a closed pipe without
+        # throwing.  Only treat an empty result as cancellation when the
+        # cancellation callback closed the pipe.  If real data arrived,
+        # return it even if the token was cancelled in the meantime
+        # (.NET semantics: completed operations are not retroactively
+        # cancelled).
+        if isempty(result) && is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        return result
+    catch ex
+        if ex isa OperationCanceledException
+            rethrow()
+        end
+        if is_cancellation_requested(token)
+            throw(OperationCanceledException(token))
+        end
+        rethrow()
+    finally
+        close(reg)
+    end
+end
+
 # ---------------------------------------------------------------------------
 # Sockets.accept with cancellation
 # ---------------------------------------------------------------------------
