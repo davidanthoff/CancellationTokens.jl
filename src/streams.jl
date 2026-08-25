@@ -18,6 +18,16 @@
 # notifies the stream's condition variable on cancel. Base's own readers
 # sleep on that same condition and tolerate spurious wakeups (they re-check
 # their predicate and sleep again), so waking it is harmless.
+#
+# Why Julia ≥ 1.6: because the implementation mirrors Base's internal wait
+# protocol, it is tied to the protocol's exact shape, and that shape changed
+# three times before 1.6 — 1.0/1.1 wait on a plain `x.readnotify` Condition
+# with no locking and no `readerror` field; 1.2 introduces the `x.cond`
+# lock; 1.3–1.5 add the iolock and `readerror` but not the StatusEOF
+# handling. Supporting those eras is possible, but each would need its own
+# faithful replica of that era's wait_readnb, tested on that version; the
+# stable modern protocol (identical from 1.6 through 1.12) is what is
+# supported here.
 # ---------------------------------------------------------------------------
 
 @static if VERSION >= v"1.6"
