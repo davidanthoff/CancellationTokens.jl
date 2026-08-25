@@ -525,6 +525,7 @@ else
 end
 
 include("augment_base.jl")
+include("streams.jl")
 
 # ---------------------------------------------------------------------------
 # Precompile directives — all methods are type-stable, so precompile()
